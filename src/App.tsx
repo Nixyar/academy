@@ -6,6 +6,7 @@ import { CoursesPage } from '@/pages/CoursesPage';
 import { PricingPage } from '@/pages/PricingPage';
 import { ProfilePage } from '@/pages/ProfilePage';
 import { LessonPage } from '@/pages/LessonPage';
+import { FreeLandingPage } from '@/pages/FreeLandingPage';
 import '@/styles/index.scss';
 
 const App: React.FC = () => (
@@ -13,6 +14,7 @@ const App: React.FC = () => (
     <Routes>
       <Route element={<MainLayout />}>
         <Route path="/" element={<HomePage />} />
+        <Route path="/free-landing" element={<FreeLandingPage />} />
         <Route path="/courses" element={<CoursesPage />} />
         <Route path="/courses/:courseId" element={<LessonPage />} />
         <Route path="/pricing" element={<PricingPage />} />
