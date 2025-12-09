@@ -15,7 +15,8 @@ export interface Course {
   tech: 'HTML' | 'CSS' | 'JS';
   image: string;
   lessons: Lesson[];
-  color: string;
+  accent: string;
+  gradient: string;
 }
 
 export interface User {

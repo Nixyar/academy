@@ -1,11 +1,12 @@
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI } from '@google/genai';
 
 class GeminiService {
   private ai: GoogleGenAI;
-  private modelId = "gemini-2.5-flash";
+  private modelId = 'gemini-2.5-flash';
 
   constructor() {
-    this.ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+    const apiKey = process.env.GEMINI_API_KEY || process.env.API_KEY || '';
+    this.ai = new GoogleGenAI({ apiKey });
   }
 
   async getCodeHelp(currentCode: string, userQuery: string): Promise<string> {
