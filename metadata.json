@@ -1,5 +1,8 @@
 {
-  "name": "VibeCoderAI",
-  "description": "Платформа будущего для обучения кодингу с персональным AI-наставником VibeCoder.",
-  "requestFramePermissions": []
+  "name": "VibeCoderAi",
+  "description": "Платформа обучения вайб-кодингу с ИИ. Создавайте приложения силой мысли.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
 }
