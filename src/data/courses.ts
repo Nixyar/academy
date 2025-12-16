@@ -15,7 +15,7 @@ export const courses: Course[] = [
         id: 'l1',
         title: 'Твой первый тег',
         content: 'HTML-элементы — это нейроны веба. Узнай, как использовать теги для создания структуры.',
-        initialCode: '<!-- VibeCoderAI Editor v1.0 -->\n<!-- Напиши свой код здесь -->\n<h1 class="title">Привет, VibeCoderAI</h1>\n<p>Я готов кодить с AI!</p>\n\n<style>\n  .title { color: white; font-family: sans-serif; }\n</style>',
+        initialCode: '\n<h1 class="title">Привет, VibeCoderAI</h1>\n<p>Я готов кодить с AI!</p>\n\n<style>\n  .title { color: white; font-family: sans-serif; }\n</style>',
         challenge: 'Добавь элемент button (кнопку) под параграфом с текстом «Запустить AI».'
       },
       {
