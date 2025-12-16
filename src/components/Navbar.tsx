@@ -4,6 +4,7 @@ import { Code2, Menu, User as UserIcon, X } from 'lucide-react';
 
 const navItems = [
   { path: '/', label: 'Главная' },
+  { path: '/free-landing', label: 'Vibe Landing' },
   { path: '/courses', label: 'Курсы' },
   { path: '/pricing', label: 'Тарифы' },
 ];

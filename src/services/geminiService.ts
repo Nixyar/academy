@@ -57,6 +57,37 @@ class GeminiService {
       return "Не могу просканировать код сейчас.";
     }
   }
+
+  async buildLandingSection(userPrompt: string, currentCode: string): Promise<string> {
+    try {
+      const response = await this.ai.models.generateContent({
+        model: this.modelId,
+        contents: `
+          Ты — VibeCoder AI, фронтенд наставник.
+
+          Задача: вернуть готовый HTML + CSS (при необходимости минимум JS) для секции лендинга.
+          Требования:
+          - Отвечай только кодом без пояснений и без Markdown-блоков.
+          - Код должен быть самодостаточным: <style> внутри, без внешних библиотек.
+          - Учитывай текущий код пользователя (если нужно — перепиши его целиком).
+
+          Текущий код:
+          \`\`\`
+          ${currentCode}
+          \`\`\`
+
+          Запрос пользователя:
+          ${userPrompt}
+        `,
+      });
+
+      const text = response.text?.trim();
+      return text && text.length > 0 ? text : currentCode;
+    } catch (error) {
+      console.error('AI build error:', error);
+      return currentCode;
+    }
+  }
 }
 
 export const geminiService = new GeminiService();
