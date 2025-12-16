@@ -1,6 +1,6 @@
 import React from 'react';
 import { User, Course } from '../types';
-import { User as UserIcon, Zap, Crown, BookOpen, Clock, Settings, LogOut, ChevronRight, Play } from 'lucide-react';
+import { Zap, Crown, BookOpen, Clock, LogOut, ChevronRight, Play, Sparkles } from 'lucide-react';
 
 interface ProfilePageProps {
   user: User;
@@ -14,9 +14,9 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, courses, onLogou
   
   // Calculate mock stats
   const coursesInProgress = Object.keys(user.progress).length;
-  const completedCount = user.completedCourses.length;
   // Vibe Score is just a gamification number
-  const vibeScore = (completedCount * 1000) + (coursesInProgress * 150) + 50;
+  const totalCalls = 15;
+  const remainingCalls = 10;
 
   return (
     <div className="min-h-screen bg-void text-white font-sans">
@@ -62,18 +62,29 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, courses, onLogou
                 <p className="text-slate-400 mb-6 text-lg">Готов продолжить писать код силой мысли?</p>
                 
                 <div className="flex flex-wrap gap-4">
-                    <div className="bg-glass border border-white/10 rounded-xl px-5 py-3 flex items-center gap-3 hover:border-vibe-500/50 transition-colors">
-                        <div className="p-2 bg-vibe-500/20 rounded-lg text-vibe-400"><BookOpen className="w-5 h-5" /></div>
+                    <div className="bg-[#0b1120] border border-white/10 rounded-2xl px-4 py-3 flex items-center gap-3 shadow-lg shadow-black/30 min-w-[240px]">
+                        <div className="p-2.5 bg-vibe-500/15 rounded-2xl text-vibe-300 border border-vibe-500/20">
+                            <BookOpen className="w-5 h-5" />
+                        </div>
                         <div>
-                            <div className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">Курсов</div>
-                            <div className="font-bold text-lg font-display">{coursesInProgress} Активно</div>
+                            <div className="text-[11px] text-slate-500 uppercase font-bold tracking-wider">Курсов</div>
+                            <div className="flex items-baseline gap-2">
+                                <span className="text-2xl font-black font-display text-white">{coursesInProgress}</span>
+                                <span className="text-sm font-semibold text-slate-400">Активно</span>
+                            </div>
                         </div>
                     </div>
-                    <div className="bg-glass border border-white/10 rounded-xl px-5 py-3 flex items-center gap-3 hover:border-purple-500/50 transition-colors">
-                        <div className="p-2 bg-purple-500/20 rounded-lg text-purple-400"><Zap className="w-5 h-5" /></div>
+                    <div className="bg-[#0b1120] border border-white/10 rounded-2xl px-4 py-3 flex items-center gap-3 shadow-lg shadow-black/30 min-w-[260px]">
+                        <div className="p-2.5 bg-purple-500/15 rounded-2xl text-purple-300 border border-purple-500/20">
+                            <Sparkles className="w-5 h-5" />
+                        </div>
                         <div>
-                            <div className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">Vibe Score</div>
-                            <div className="font-bold text-lg font-display">{vibeScore} XP</div>
+                            <div className="text-[11px] text-slate-500 uppercase font-bold tracking-wider">Vibecoder AI</div>
+                            <div className="flex items-baseline gap-2">
+                                <span className="text-3xl font-black font-display text-white">{remainingCalls}</span>
+                                <span className="text-lg font-semibold text-slate-500">/{totalCalls}</span>
+                            </div>
+                            <div className="text-xs text-slate-500 font-medium">осталось вызовов</div>
                         </div>
                     </div>
                 </div>
@@ -159,6 +170,13 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, courses, onLogou
                     </div>
                 )
             })}
+        </div>
+
+        <div className="border-t border-white/5 pt-6 mt-2 flex justify-center">
+            <div className="flex items-center gap-3 text-slate-400 text-sm font-medium">
+                <span className="w-2 h-2 rounded-full bg-vibe-400 shadow-[0_0_8px_rgba(0,243,255,0.6)]"></span>
+                <span>Новые модули и направления добавляются регулярно.</span>
+            </div>
         </div>
       </main>
     </div>
