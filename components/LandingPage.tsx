@@ -1,6 +1,6 @@
 import React from 'react';
 import { Course, User } from '../types';
-import { Play, Code, Zap, Rocket, CheckCircle, Sparkles, User as UserIcon, Terminal, Shield } from 'lucide-react';
+import { Play, Code, Zap, Rocket, CheckCircle, Sparkles, Terminal, Shield } from 'lucide-react';
 
 interface LandingPageProps {
   courses: Course[];
@@ -55,7 +55,6 @@ export const LandingPage: React.FC<LandingPageProps> = ({
             <div className="hidden md:flex items-center gap-8">
               <div className="flex items-baseline space-x-8">
                 <a href="#courses" className="text-sm font-medium text-slate-300 hover:text-white hover:drop-shadow-[0_0_8px_rgba(255,255,255,0.5)] transition-all">Курсы</a>
-                <a href="#pricing" className="text-sm font-medium text-slate-300 hover:text-white hover:drop-shadow-[0_0_8px_rgba(255,255,255,0.5)] transition-all">Тарифы</a>
               </div>
               
               {user && (
@@ -89,25 +88,52 @@ export const LandingPage: React.FC<LandingPageProps> = ({
             <span className="text-xs font-bold text-vibe-100 tracking-wide uppercase font-display">AI-Native Education Platform</span>
         </div>
 
-        <h1 className="max-w-6xl mx-auto text-6xl md:text-8xl font-bold font-display tracking-tighter leading-[1.1] mb-8">
-          Кодируй на частоте <br />
+        <h1 className="max-w-6xl mx-auto text-5xl md:text-7xl font-bold font-display tracking-tighter leading-[1.1] mb-8">
+          Пиши код со скоростью мысли.<br />
           <span className="transparent-text bg-clip-text text-transparent bg-gradient-to-r from-vibe-glow via-purple-glow to-pink-glow animate-gradient bg-[length:200%_auto] drop-shadow-[0_0_30px_rgba(188,19,254,0.3)]">
-            Вайба и Мысли
+            AI делает остальное.
           </span>
         </h1>
 
-        <p className="max-w-2xl mx-auto text-lg md:text-xl text-slate-400 leading-relaxed mb-12">
-          Забудь о синтаксисе. Используй <span className="text-white font-semibold">Gemini 3 Pro</span> и <span className="text-white font-semibold">Nano Banana</span>, чтобы создавать приложения со скоростью мысли.
+        <p className="max-w-2xl mx-auto text-lg md:text-xl text-slate-400 leading-relaxed mb-6">
+          Забудь о рутине и синтаксисе. Используй AI-подход, чтобы создавать приложения со скоростью мысли.
         </p>
+
+        <div className="flex flex-wrap justify-center gap-2 text-sm text-slate-400 mb-10">
+          {['Gemini', 'DeepSeek', 'Ollama', 'Cursor', 'VS Code'].map((tool) => (
+            <span 
+              key={tool} 
+              className="px-3 py-1 rounded-full bg-white/5 border border-white/10 transition-all duration-200 hover:bg-white/10 hover:border-vibe-400/50 hover:text-white hover:-translate-y-0.5 hover:shadow-[0_0_18px_rgba(0,243,255,0.35)]"
+            >
+              {tool}
+            </span>
+          ))}
+        </div>
 
         <div className="flex flex-col items-center gap-6">
           <button 
               onClick={handleHeroAction}
-              className="relative w-full sm:w-auto px-12 py-5 rounded-2xl bg-white text-void font-bold text-xl hover:scale-[1.02] active:scale-[0.98] transition-all duration-200 shadow-[0_0_35px_rgba(255,255,255,0.3)] flex items-center justify-center gap-3 group font-display"
+              className="relative w-full sm:w-auto px-10 sm:px-12 py-4 sm:py-5 rounded-2xl bg-white text-void font-bold text-xl hover:scale-[1.02] active:scale-[0.98] transition-all duration-200 shadow-[0_0_35px_rgba(255,255,255,0.3)] flex items-center justify-center font-display"
           >
-            <Play className="w-6 h-6 fill-void group-hover:translate-x-1 transition-transform" />
-            {user ? 'Продолжить обучение' : 'Начать бесплатно'}
+            <span className="text-center">{user ? 'Продолжить обучение' : 'Начать вайб-кодить'}</span>
           </button>
+        </div>
+      </section>
+
+      {/* What It Really Is Section */}
+      <section className="py-24 relative">
+        <div className="pointer-events-none absolute top-0 left-0 w-full h-px bg-gradient-to-r from-transparent via-white/20 to-transparent opacity-80"></div>
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+          <h2 className="text-4xl md:text-6xl font-black font-display tracking-tight leading-[1.05] mb-8">
+            Это не курсы.<br />
+            <span className="text-transparent bg-clip-text bg-gradient-to-r from-vibe-glow via-sky-400 to-purple-glow">
+              Это AI-мышление.
+            </span>
+          </h2>
+
+          <p className="max-w-3xl mx-auto text-lg md:text-2xl text-slate-300 leading-relaxed">
+            VibeCoderAI — это академия нового поколения, где ты учишься <span className="text-white font-semibold">формулировать задачи для AI</span>, подбирать правильные инструменты и получать результат за минуты, а не дни.
+          </p>
         </div>
       </section>
 
@@ -122,9 +148,9 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               <div className="w-14 h-14 rounded-2xl bg-vibe-900/50 flex items-center justify-center mb-6 border border-vibe-500/20 group-hover:border-vibe-glow/50 group-hover:shadow-[0_0_20px_rgba(0,243,255,0.4)] transition-all relative z-10">
                 <Terminal className="w-7 h-7 text-vibe-400" />
               </div>
-              <h3 className="text-2xl font-bold mb-3 text-white font-display relative z-10">Nano Banana</h3>
+              <h3 className="text-2xl font-bold mb-3 text-white font-display relative z-10">AI & Prompts</h3>
               <p className="text-slate-400 leading-relaxed relative z-10">
-                Научитесь писать профессиональный код с помощью промптов. Больше никакой рутины, только чистая логика.
+                Научись писать промпты, которые превращают идеи в рабочие сайты и приложения.
               </p>
             </div>
 
@@ -134,9 +160,9 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               <div className="w-14 h-14 rounded-2xl bg-purple-900/50 flex items-center justify-center mb-6 border border-purple-500/20 group-hover:border-purple-glow/50 group-hover:shadow-[0_0_20px_rgba(188,19,254,0.4)] transition-all relative z-10">
                 <Code className="w-7 h-7 text-purple-400" />
               </div>
-              <h3 className="text-2xl font-bold mb-3 text-white font-display relative z-10">AI & Prompts</h3>
+              <h3 className="text-2xl font-bold mb-3 text-white font-display relative z-10">Vibe Coding (Web)</h3>
               <p className="text-slate-400 leading-relaxed relative z-10">
-                Пиши и редактируй код при помощи промптов. Gemini 3 Pro превращает ваши идеи в работающие приложения.
+                Создавай лендинги и веб-приложения через AI — без фреймворк-боли и бесконечной рутины.
               </p>
             </div>
 
@@ -146,9 +172,9 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               <div className="w-14 h-14 rounded-2xl bg-pink-900/50 flex items-center justify-center mb-6 border border-pink-500/20 group-hover:border-pink-glow/50 group-hover:shadow-[0_0_20px_rgba(255,0,85,0.4)] transition-all relative z-10">
                 <Rocket className="w-7 h-7 text-pink-400" />
               </div>
-              <h3 className="text-2xl font-bold mb-3 text-white font-display relative z-10">Vibe Methodology</h3>
+              <h3 className="text-2xl font-bold mb-3 text-white font-display relative z-10">Методология</h3>
               <p className="text-slate-400 leading-relaxed relative z-10">
-                Меньше кода, больше смысла. Мы учим не просто писать функции, а управлять потоком создания продукта.
+                Понимай, какой AI использовать и зачем, чтобы решать именно твою задачу.
               </p>
             </div>
           </div>
@@ -243,10 +269,10 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                     
                     <ul className="text-left space-y-5 mb-12">
                         {[
-                            "Доступ ко всем курсам платформы",
-                            "Безлимитный Nano Banana Editor",
-                            "Gemini 3 Pro Vision Analyser",
-                            "Доступ в закрытый Discord"
+                            "VibeCoderAI (до 50 запросов в день)",
+                            "Расширенные лимиты в PRO",
+                            "Готовые промпты под разные задачи",
+                            "Закрытые модули и направления"
                         ].map((item, i) => (
                             <li key={i} className="flex items-center gap-4">
                                 <div className="w-6 h-6 rounded-full bg-green-500/20 flex items-center justify-center flex-shrink-0">
@@ -272,11 +298,6 @@ export const LandingPage: React.FC<LandingPageProps> = ({
 
       <footer className="py-12 border-t border-white/5 bg-[#02050e]">
           <div className="max-w-7xl mx-auto px-4 text-center">
-             <div className="flex justify-center gap-8 mb-8">
-                 {['Twitter', 'Discord', 'Telegram', 'GitHub'].map(social => (
-                     <a href="#" key={social} className="text-slate-500 hover:text-white hover:underline decoration-vibe-500 underline-offset-4 transition-all text-sm font-medium">{social}</a>
-                 ))}
-             </div>
              <p className="text-slate-600 text-sm">© 2024 VibeCoderAi. Создано с помощью Gemini.</p>
           </div>
       </footer>
