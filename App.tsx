@@ -1,9 +1,12 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { LandingPage } from './components/LandingPage';
 import { CourseViewer } from './components/CourseViewer';
 import { AuthModal } from './components/AuthModal';
 import { ProfilePage } from './components/ProfilePage';
+import { AuthCallback } from './components/AuthCallback';
 import { Course, LessonType, User } from './types';
+import { logout, me } from './services/authApi';
+import { userFromProfile } from './services/userFromProfile';
 
 // Mock Data
 const MOCK_COURSES: Course[] = [
@@ -88,28 +91,47 @@ const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
+  const [bootstrapping, setBootstrapping] = useState(true);
 
   const handleOpenAuth = (mode: 'login' | 'register') => {
     setAuthMode(mode);
     setAuthModalOpen(true);
   };
 
-  const handleLogin = (email: string, name?: string) => {
-    // Mock user creation
-    const newUser: User = {
-        id: 'user-1',
-        name: name || 'Vibe Coder',
-        email: email,
-        isSubscribed: false,
-        progress: { 'course-1': 1 }, // Mock progress: 1 lesson done in course 1
-        completedCourses: []
+  useEffect(() => {
+    let cancelled = false;
+    async function init() {
+      try {
+        const profile = await me();
+        if (cancelled) return;
+        setUser(userFromProfile(profile));
+        setCurrentView('profile');
+      } catch {
+        if (cancelled) return;
+        setUser(null);
+      } finally {
+        if (cancelled) return;
+        setBootstrapping(false);
+      }
+    }
+    void init();
+    return () => {
+      cancelled = true;
     };
-    setUser(newUser);
+  }, []);
+
+  const handleAuthenticated = (authedUser: User) => {
+    setUser(authedUser);
     setCurrentView('profile');
     setAuthModalOpen(false);
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    try {
+      await logout();
+    } catch {
+      // ignore
+    }
     setUser(null);
     setCurrentView('landing');
   };
@@ -147,12 +169,32 @@ const App: React.FC = () => {
 
   const activeCourse = MOCK_COURSES.find(c => c.id === selectedCourseId);
 
+  const isAuthCallback = window.location.pathname === '/auth/callback' || window.location.pathname.startsWith('/auth/callback/');
+  if (isAuthCallback) {
+    return (
+      <AuthCallback
+        onAuthenticated={(authedUser) => {
+          setUser(authedUser);
+          setCurrentView('profile');
+        }}
+      />
+    );
+  }
+
+  if (bootstrapping) {
+    return (
+      <div className="min-h-screen bg-void text-white flex items-center justify-center">
+        <div className="text-slate-300 text-sm">Загрузка…</div>
+      </div>
+    );
+  }
+
   return (
     <div className="font-sans antialiased text-slate-900">
       <AuthModal 
         isOpen={authModalOpen} 
         onClose={() => setAuthModalOpen(false)}
-        onLogin={handleLogin}
+        onAuthenticated={handleAuthenticated}
         initialMode={authMode}
       />
 
