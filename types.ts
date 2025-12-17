@@ -27,7 +27,11 @@ export interface User {
   id: string;
   name: string;
   email: string;
+  avatarUrl?: string | null;
   isSubscribed: boolean;
+  plan?: string;
+  dailyLimit?: number;
+  dailyUsed?: number;
   progress: Record<string, number>; // courseId -> lessonIndex
   completedCourses: string[];
 }

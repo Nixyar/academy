@@ -76,6 +76,23 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                           className="group-hover:text-vibe-400 transition-colors">{user.name}</span>
                     </button>
                 )}
+
+                {!user && (
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={() => onOpenAuth('login')}
+                      className="text-sm font-bold text-slate-200 hover:text-white transition-colors px-4 py-2 rounded-full hover:bg-white/5 border border-transparent hover:border-white/10"
+                    >
+                      Войти
+                    </button>
+                    <button
+                      onClick={() => onOpenAuth('register')}
+                      className="text-sm font-bold px-5 py-2.5 rounded-full bg-white text-void hover:bg-slate-200 transition-colors"
+                    >
+                      Регистрация
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           </div>
