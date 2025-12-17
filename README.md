@@ -15,6 +15,31 @@ View your app in AI Studio: https://ai.studio/apps/drive/1F1_d45RhWruLCmKeX7obit
 
 1. Install dependencies:
    `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
+2. Set env vars in `.env.local`:
+   - `GEMINI_API_KEY` (Gemini API key)
+   - `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` (Supabase project settings → API)
+   - `VITE_API_BASE_URL=https://api.vibecoderai.ru` (текущий прод-бэкенд)
 3. Run the app:
-   `npm run dev`
+   `npm run start`
+
+## Auth (frontend ↔ backend)
+
+- OAuth callback route: `/auth/callback` (добавьте в Supabase Auth → URL Configuration → Redirect URLs)
+- After Supabase login, frontend calls:
+  - `POST /api/auth/session` with `{ access_token, refresh_token }` to store httpOnly cookies
+  - `GET /api/me` to load the user profile
+
+### Important about local dev
+
+Если запускать фронтенд на `http://localhost:5173` и бэкенд на `https://api.vibecoderai.ru`, то cookies с `SameSite=Lax` не будут отправляться в XHR/fetch (это разные “site”). Для работы нужно:
+- либо поднять фронт на домене внутри `vibecoderai.ru` (например, `https://app.vibecoderai.ru`), тогда `app.*` ↔ `api.*` — same-site и cookies будут ходить,
+- либо иметь dev-бэкенд, который ставит cookies с `SameSite=None; Secure` для кросс-сайта.
+
+### Prod checklist
+
+- Supabase Auth → URL Configuration:
+  - Site URL: ваш реальный origin фронта (например `https://vibecoderai.ru` или `https://www.vibecoderai.ru`)
+  - Redirect URLs: добавьте `https://<frontend-origin>/auth/callback`
+- Backend CORS (если фронт и API на разных origin):
+  - `Access-Control-Allow-Origin` должен быть ровно `<frontend-origin>` (не `*`, если вы используете cookies)
+  - `Access-Control-Allow-Credentials: true`

@@ -1,42 +1,119 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { X, Mail, Lock, User as UserIcon, ArrowRight, Loader2, Chrome } from 'lucide-react';
+import { supabase } from '../services/supabaseClient';
+import { me, setSession } from '../services/authApi';
+import { userFromProfile } from '../services/userFromProfile';
+import type { User } from '../types';
 
 interface AuthModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onLogin: (email: string, name?: string) => void;
+  onAuthenticated: (user: User) => void;
   initialMode?: 'login' | 'register';
 }
 
-export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLogin, initialMode = 'login' }) => {
+export const AuthModal: React.FC<AuthModalProps> = ({
+  isOpen,
+  onClose,
+  onAuthenticated,
+  initialMode = 'login',
+}) => {
   const [mode, setMode] = useState<'login' | 'register'>(initialMode);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setMode(initialMode);
+    setError(null);
+    setInfo(null);
+    setLoading(false);
+  }, [isOpen, initialMode]);
 
   if (!isOpen) return null;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    
-    // Mock API call simulation
-    setTimeout(() => {
-      setLoading(false);
-      onLogin(email, mode === 'register' ? name : undefined);
+    setError(null);
+    setInfo(null);
+
+    try {
+      if (!supabase) {
+        throw new Error('SUPABASE_ENV_MISSING');
+      }
+
+      if (mode === 'login') {
+        const { data, error: signInError } = await supabase.auth.signInWithPassword({
+          email,
+          password,
+        });
+        if (signInError) throw signInError;
+        if (!data.session) throw new Error('SESSION_MISSING');
+
+        await setSession(data.session.access_token, data.session.refresh_token);
+      } else {
+        const { data, error: signUpError } = await supabase.auth.signUp({
+          email,
+          password,
+          options: {
+            data: { name },
+          },
+        });
+        if (signUpError) throw signUpError;
+
+        if (!data.session) {
+          setInfo('Проверьте почту: возможно нужно подтвердить email перед входом.');
+          return;
+        }
+        await setSession(data.session.access_token, data.session.refresh_token);
+      }
+
+      await supabase.auth.signOut();
+
+      const profile = await me();
+      onAuthenticated(userFromProfile(profile));
       onClose();
-    }, 1500);
+    } catch (e: any) {
+      const message =
+        e?.message === 'SUPABASE_ENV_MISSING'
+          ? 'Не настроены переменные окружения Supabase (VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY).'
+          : e?.message || 'Ошибка авторизации.';
+      setError(message);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const handleGoogleLogin = () => {
+  const handleGoogleLogin = async () => {
     setLoading(true);
-    setTimeout(() => {
-        setLoading(false);
-        onLogin('user@gmail.com', 'Google User');
-        onClose();
-    }, 1000);
-  }
+    setError(null);
+    setInfo(null);
+
+    try {
+      if (!supabase) {
+        throw new Error('SUPABASE_ENV_MISSING');
+      }
+
+      const redirectTo = `${window.location.origin}/auth/callback`;
+      const { error: oauthError } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: { redirectTo },
+      });
+      if (oauthError) throw oauthError;
+    } catch (e: any) {
+      const message =
+        e?.message === 'SUPABASE_ENV_MISSING'
+          ? 'Не настроены переменные окружения Supabase (VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY).'
+          : e?.message || 'Ошибка входа через Google.';
+      setError(message);
+      setLoading(false);
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
@@ -150,6 +227,18 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLogin, 
               )}
             </button>
           </form>
+
+          {(error || info) && (
+            <div
+              className={`mt-5 rounded-2xl p-4 text-sm border ${
+                error
+                  ? 'bg-red-500/10 border-red-500/20 text-red-200'
+                  : 'bg-white/5 border-white/10 text-slate-300'
+              }`}
+            >
+              {error ?? info}
+            </div>
+          )}
 
           <div className="mt-6 text-center">
             <p className="text-slate-400 text-sm">

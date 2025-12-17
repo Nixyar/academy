@@ -14,9 +14,9 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, courses, onLogou
   
   // Calculate mock stats
   const coursesInProgress = Object.keys(user.progress).length;
-  // Vibe Score is just a gamification number
-  const totalCalls = 15;
-  const remainingCalls = 10;
+  const totalCalls = user.dailyLimit ?? 15;
+  const usedCalls = user.dailyUsed ?? 0;
+  const remainingCalls = Math.max(0, totalCalls - usedCalls);
 
   return (
     <div className="min-h-screen bg-void text-white font-sans">
