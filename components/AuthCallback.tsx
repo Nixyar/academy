@@ -25,7 +25,7 @@ export function AuthCallback(props: { onAuthenticated: (user: User) => void }) {
         if (!data.session) throw new Error('SESSION_MISSING');
 
         await setSession(data.session.access_token, data.session.refresh_token);
-        await supabase.auth.signOut();
+        await supabase.auth.signOut({ scope: 'local' });
 
         const profile = await me();
         const user = userFromProfile(profile);
