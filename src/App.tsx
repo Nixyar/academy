@@ -7,6 +7,7 @@ import { PricingPage } from '@/pages/PricingPage';
 import { ProfilePage } from '@/pages/ProfilePage';
 import { LessonPage } from '@/pages/LessonPage';
 import { FreeLandingPage } from '@/pages/FreeLandingPage';
+import { AuthCallbackPage } from '@/pages/AuthCallbackPage';
 import '@/styles/index.scss';
 
 const App: React.FC = () => (
@@ -19,6 +20,7 @@ const App: React.FC = () => (
         <Route path="/courses/:courseId" element={<LessonPage />} />
         <Route path="/pricing" element={<PricingPage />} />
         <Route path="/profile" element={<ProfilePage />} />
+        <Route path="/auth/callback" element={<AuthCallbackPage />} />
       </Route>
     </Routes>
   </HashRouter>
