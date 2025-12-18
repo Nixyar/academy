@@ -10,7 +10,8 @@ export class ApiError extends Error {
   }
 }
 
-const API_BASE_URL = (import.meta as any).env?.VITE_API_BASE_URL ?? '';
+const RAW_API_BASE_URL = (import.meta as any).env?.VITE_API_BASE_URL ?? '';
+const API_BASE_URL = (import.meta as any).env?.DEV ? '' : RAW_API_BASE_URL;
 
 type Json = Record<string, unknown> | unknown[] | string | number | boolean | null;
 
@@ -63,4 +64,3 @@ export async function apiFetch<T>(
   const json = (await readJsonSafe(response)) as T;
   return json;
 }
-

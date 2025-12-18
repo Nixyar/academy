@@ -5,6 +5,10 @@ const supabaseAnonKey = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY as stri
 
 export const supabase = (() => {
   if (!supabaseUrl || !supabaseAnonKey) return null;
-  return createClient(supabaseUrl, supabaseAnonKey);
+  return createClient(supabaseUrl, supabaseAnonKey, {
+    auth: {
+      flowType: 'pkce',
+      detectSessionInUrl: false,
+    },
+  });
 })();
-
