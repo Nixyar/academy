@@ -91,7 +91,8 @@ const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
-  const [bootstrapping, setBootstrapping] = useState(true);
+  const [bootstrapping, setBootstrapping] = useState(false);
+  const [hasFetchedProfile, setHasFetchedProfile] = useState(false);
 
   const handleOpenAuth = (mode: 'login' | 'register') => {
     setAuthMode(mode);
@@ -99,26 +100,28 @@ const App: React.FC = () => {
   };
 
   useEffect(() => {
+    if (currentView !== 'profile' || user || hasFetchedProfile) return;
     let cancelled = false;
-    async function init() {
+    async function loadProfile() {
+      setBootstrapping(true);
       try {
         const profile = await me();
         if (cancelled) return;
         setUser(userFromProfile(profile));
-        setCurrentView('profile');
       } catch {
         if (cancelled) return;
         setUser(null);
       } finally {
         if (cancelled) return;
+        setHasFetchedProfile(true);
         setBootstrapping(false);
       }
     }
-    void init();
+    void loadProfile();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [currentView, hasFetchedProfile, user]);
 
   const handleAuthenticated = (authedUser: User) => {
     setUser(authedUser);
@@ -181,7 +184,7 @@ const App: React.FC = () => {
     );
   }
 
-  if (bootstrapping) {
+  if (bootstrapping && currentView === 'profile') {
     return (
       <div className="min-h-screen bg-void text-white flex items-center justify-center">
         <div className="text-slate-300 text-sm">Загрузка…</div>
