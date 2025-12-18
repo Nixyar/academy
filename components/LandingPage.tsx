@@ -7,8 +7,10 @@ interface LandingPageProps {
   user: User | null;
   onSelectCourse: (courseId: string) => void;
   onSubscribe: () => void;
-  onOpenAuth: (mode: 'login' | 'register') => void;
+  onLoginWithGoogle: () => void;
   onGoToProfile: () => void;
+  error: string | null;
+  loadingProfile: boolean;
 }
 
 export const LandingPage: React.FC<LandingPageProps> = ({
@@ -16,8 +18,10 @@ export const LandingPage: React.FC<LandingPageProps> = ({
   user,
   onSelectCourse,
   onSubscribe,
-  onOpenAuth,
+  onLoginWithGoogle,
   onGoToProfile,
+  error,
+  loadingProfile,
 }) => {
   const isSubscribed = user?.isSubscribed || false;
 
@@ -25,7 +29,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
     if (user) {
       onSelectCourse(courses[0].id);
     } else {
-      onOpenAuth('login');
+      onLoginWithGoogle();
     }
   };
 
@@ -63,35 +67,25 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                      className="text-sm font-medium text-slate-300 hover:text-white hover:drop-shadow-[0_0_8px_rgba(255,255,255,0.5)] transition-all">Курсы</a>
                 </div>
 
-                {user && (
-                    <button
-                        onClick={onGoToProfile}
-                        className="flex items-center gap-2 px-5 py-2.5 rounded-full bg-white/5 border border-white/10 hover:bg-white/10 hover:border-vibe-400/50 transition-all text-sm font-bold group"
+                {user ? (
+                  <button
+                    onClick={onGoToProfile}
+                    className="flex items-center gap-2 px-5 py-2.5 rounded-full bg-white/5 border border-white/10 hover:bg-white/10 hover:border-vibe-400/50 transition-all text-sm font-bold group"
+                  >
+                    <div
+                      className="w-5 h-5 rounded-full bg-gradient-to-r from-vibe-500 to-purple-500 flex items-center justify-center text-[10px] text-white"
                     >
-                      <div
-                          className="w-5 h-5 rounded-full bg-gradient-to-r from-vibe-500 to-purple-500 flex items-center justify-center text-[10px] text-white">
-                        {user.name.charAt(0).toUpperCase()}
-                      </div>
-                      <span
-                          className="group-hover:text-vibe-400 transition-colors">{user.name}</span>
-                    </button>
-                )}
-
-                {!user && (
-                  <div className="flex items-center gap-3">
-                    <button
-                      onClick={() => onOpenAuth('login')}
-                      className="text-sm font-bold text-slate-200 hover:text-white transition-colors px-4 py-2 rounded-full hover:bg-white/5 border border-transparent hover:border-white/10"
-                    >
-                      Войти
-                    </button>
-                    <button
-                      onClick={() => onOpenAuth('register')}
-                      className="text-sm font-bold px-5 py-2.5 rounded-full bg-white text-void hover:bg-slate-200 transition-colors"
-                    >
-                      Регистрация
-                    </button>
-                  </div>
+                      {user.name.charAt(0).toUpperCase()}
+                    </div>
+                    <span className="group-hover:text-vibe-400 transition-colors">{user.name}</span>
+                  </button>
+                ) : (
+                  <button
+                    onClick={onLoginWithGoogle}
+                    className="text-sm font-bold px-5 py-2.5 rounded-full bg-white text-void hover:bg-slate-200 transition-colors"
+                  >
+                    Войти через Google
+                  </button>
                 )}
               </div>
             </div>
@@ -143,13 +137,17 @@ export const LandingPage: React.FC<LandingPageProps> = ({
 
           <div className="flex flex-col items-center gap-6">
             <button
-                onClick={handleHeroAction}
-                className="relative w-full sm:w-auto px-10 sm:px-12 py-4 sm:py-5 rounded-2xl bg-white text-void font-bold text-xl hover:scale-[1.02] active:scale-[0.98] transition-all duration-200 shadow-[0_0_35px_rgba(255,255,255,0.3)] flex items-center justify-center font-display"
+              onClick={handleHeroAction}
+              className="relative w-full sm:w-auto px-10 sm:px-12 py-4 sm:py-5 rounded-2xl bg-white text-void font-bold text-xl hover:scale-[1.02] active:scale-[0.98] transition-all duration-200 shadow-[0_0_35px_rgba(255,255,255,0.3)] flex items-center justify-center font-display"
             >
-              <span className="text-center">{user
-                  ? 'Продолжить обучение'
-                  : 'Начать вайб-кодить'}</span>
+              <span className="text-center">{user ? 'Продолжить обучение' : 'Начать через Google'}</span>
             </button>
+            {error && (
+              <p className="text-red-300 text-sm">{error}</p>
+            )}
+            {loadingProfile && (
+              <p className="text-slate-400 text-sm">Загружаем профиль…</p>
+            )}
           </div>
         </section>
 
