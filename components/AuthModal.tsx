@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { X, Mail, Lock, User as UserIcon, ArrowRight, Loader2, Chrome } from 'lucide-react';
 import { supabase } from '../services/supabaseClient';
-import { me, setSession } from '../services/authApi';
+import { me, loginWithEmail, registerWithEmail } from '../services/authApi';
 import { userFromProfile } from '../services/userFromProfile';
+import { ApiError } from '../services/apiClient';
 import type { User } from '../types';
 
 interface AuthModalProps {
@@ -43,44 +44,27 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     setInfo(null);
 
     try {
-      if (!supabase) {
-        throw new Error('SUPABASE_ENV_MISSING');
+      if (mode === 'login') {
+        await loginWithEmail(email, password);
+      } else {
+        await registerWithEmail(name, email, password);
       }
 
-      if (mode === 'login') {
-        const { data, error: signInError } = await supabase.auth.signInWithPassword({
-          email,
-          password,
-        });
-        if (signInError) throw signInError;
-        if (!data.session) throw new Error('SESSION_MISSING');
-
-        await setSession(data.session.access_token, data.session.refresh_token);
-      } else {
-        const { data, error: signUpError } = await supabase.auth.signUp({
-          email,
-          password,
-          options: {
-            data: { name },
-          },
-        });
-        if (signUpError) throw signUpError;
-
-        if (!data.session) {
+      let profile: Awaited<ReturnType<typeof me>>;
+      try {
+        profile = await me();
+      } catch (err) {
+        if (mode === 'register' && err instanceof ApiError && err.status === 401) {
           setInfo('Проверьте почту: возможно нужно подтвердить email перед входом.');
           return;
         }
-        await setSession(data.session.access_token, data.session.refresh_token);
+        throw err;
       }
-
-      const profile = await me();
       onAuthenticated(userFromProfile(profile));
       onClose();
     } catch (e: any) {
       const message =
-        e?.message === 'SUPABASE_ENV_MISSING'
-          ? 'Не настроены переменные окружения Supabase (VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY).'
-          : e?.message || 'Ошибка авторизации.';
+        e?.message || 'Ошибка авторизации.';
       setError(message);
     } finally {
       setLoading(false);

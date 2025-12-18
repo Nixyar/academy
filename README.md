@@ -27,7 +27,11 @@ View your app in AI Studio: https://ai.studio/apps/drive/1F1_d45RhWruLCmKeX7obit
 - OAuth callback route: `/auth/callback` (добавьте в Supabase Auth → URL Configuration → Redirect URLs)
 - After Supabase login, frontend calls:
   - `POST /api/auth/session` with `{ access_token, refresh_token }` to store httpOnly cookies
+  - `POST /api/auth/login` with `{ email, password }` to authenticate via email/password
+  - `POST /api/auth/register` with `{ name, email, password }` to create an account
   - `GET /api/me` to load the user profile
+  - `POST /api/auth/logout` to clear auth cookies
+  - `POST /api/auth/refresh` to refresh cookies on 401 (used internally by the frontend)
 
 ### Important about local dev
 
