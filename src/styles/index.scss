@@ -56,6 +56,10 @@ a {
   font-size: 13px;
 }
 
+.error {
+  color: #f87171;
+}
+
 .label {
   font-size: 12px;
   letter-spacing: 0.05em;
@@ -1147,6 +1151,16 @@ a {
     h4 {
       margin: 4px 0 0;
     }
+  }
+
+  &__actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 12px;
+  }
+
+  &__card.empty {
+    grid-template-columns: 1fr;
   }
 
   &__title {
