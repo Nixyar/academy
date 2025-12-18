@@ -27,3 +27,17 @@ export async function logout(): Promise<void> {
 export async function me(): Promise<BackendProfile> {
   return apiFetch<BackendProfile>('/api/me', { method: 'GET' });
 }
+
+export async function loginWithEmail(email: string, password: string): Promise<void> {
+  await apiFetch('/api/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ email, password }),
+  });
+}
+
+export async function registerWithEmail(name: string, email: string, password: string): Promise<void> {
+  await apiFetch('/api/auth/register', {
+    method: 'POST',
+    body: JSON.stringify({ name, email, password }),
+  });
+}
