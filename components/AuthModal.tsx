@@ -73,8 +73,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         await setSession(data.session.access_token, data.session.refresh_token);
       }
 
-      await supabase.auth.signOut({ scope: 'local' });
-
       const profile = await me();
       onAuthenticated(userFromProfile(profile));
       onClose();
