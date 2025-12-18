@@ -1,11 +1,11 @@
-import React, { useEffect, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { LandingPage } from './components/LandingPage';
 import { CourseViewer } from './components/CourseViewer';
-import { AuthModal } from './components/AuthModal';
 import { ProfilePage } from './components/ProfilePage';
 import { AuthCallback } from './components/AuthCallback';
 import { Course, LessonType, User } from './types';
 import { logout, me } from './services/authApi';
+import { supabase } from './services/supabaseClient';
 import { userFromProfile } from './services/userFromProfile';
 
 // Mock Data
@@ -89,41 +89,45 @@ const App: React.FC = () => {
   
   // Auth State
   const [user, setUser] = useState<User | null>(null);
-  const [authModalOpen, setAuthModalOpen] = useState(false);
-  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
-  const [bootstrapping, setBootstrapping] = useState(true);
+  const [loadingProfile, setLoadingProfile] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
 
-  const handleOpenAuth = (mode: 'login' | 'register') => {
-    setAuthMode(mode);
-    setAuthModalOpen(true);
+  const redirectToProfile = () => setCurrentView('profile');
+
+  const startGoogleAuth = async () => {
+    setAuthError(null);
+    if (!supabase) {
+      setAuthError('Supabase не настроен (VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY)');
+      return;
+    }
+
+    const redirectTo = `${window.location.origin}/auth/callback`;
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: { redirectTo },
+    });
+
+    if (error) setAuthError(error.message);
   };
 
-  useEffect(() => {
-    let cancelled = false;
-    async function init() {
-      try {
-        const profile = await me();
-        if (cancelled) return;
-        setUser(userFromProfile(profile));
-        setCurrentView('profile');
-      } catch {
-        if (cancelled) return;
-        setUser(null);
-      } finally {
-        if (cancelled) return;
-        setBootstrapping(false);
-      }
+  const ensureProfile = async () => {
+    if (user) {
+      redirectToProfile();
+      return;
     }
-    void init();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const handleAuthenticated = (authedUser: User) => {
-    setUser(authedUser);
-    setCurrentView('profile');
-    setAuthModalOpen(false);
+    if (loadingProfile) return;
+    setAuthError(null);
+    setLoadingProfile(true);
+    try {
+      const profile = await me();
+      setUser(userFromProfile(profile));
+      redirectToProfile();
+    } catch (error) {
+      setUser(null);
+      if (error instanceof Error) setAuthError(error.message);
+    } finally {
+      setLoadingProfile(false);
+    }
   };
 
   const handleLogout = async () => {
@@ -139,8 +143,8 @@ const App: React.FC = () => {
   const handleSelectCourse = (courseId: string) => {
     // If user is not logged in, ask them to login first
     if (!user) {
-        handleOpenAuth('register');
-        return;
+      void startGoogleAuth();
+      return;
     }
 
     const course = MOCK_COURSES.find(c => c.id === courseId);
@@ -157,8 +161,8 @@ const App: React.FC = () => {
 
   const handleSubscribe = () => {
     if (!user) {
-        handleOpenAuth('register');
-        return;
+      void startGoogleAuth();
+      return;
     }
     const confirm = window.confirm("Оформить подписку за 1499₽ в месяц?");
     if (confirm) {
@@ -169,7 +173,14 @@ const App: React.FC = () => {
 
   const activeCourse = MOCK_COURSES.find(c => c.id === selectedCourseId);
 
-  const isAuthCallback = window.location.pathname === '/auth/callback' || window.location.pathname.startsWith('/auth/callback/');
+  const isAuthCallback = useMemo(() => {
+    const hashPath = window.location.hash.replace(/^#/, '');
+    return (
+      window.location.pathname === '/auth/callback' ||
+      window.location.pathname.startsWith('/auth/callback/') ||
+      hashPath.startsWith('/auth/callback')
+    );
+  }, []);
   if (isAuthCallback) {
     return (
       <AuthCallback
@@ -181,31 +192,18 @@ const App: React.FC = () => {
     );
   }
 
-  if (bootstrapping) {
-    return (
-      <div className="min-h-screen bg-void text-white flex items-center justify-center">
-        <div className="text-slate-300 text-sm">Загрузка…</div>
-      </div>
-    );
-  }
-
   return (
     <div className="font-sans antialiased text-slate-900">
-      <AuthModal 
-        isOpen={authModalOpen} 
-        onClose={() => setAuthModalOpen(false)}
-        onAuthenticated={handleAuthenticated}
-        initialMode={authMode}
-      />
-
       {currentView === 'landing' && (
-        <LandingPage 
-          courses={MOCK_COURSES} 
+        <LandingPage
+          courses={MOCK_COURSES}
           user={user}
-          onSelectCourse={handleSelectCourse} 
+          onSelectCourse={handleSelectCourse}
           onSubscribe={handleSubscribe}
-          onOpenAuth={handleOpenAuth}
-          onGoToProfile={() => setCurrentView('profile')}
+          onLoginWithGoogle={startGoogleAuth}
+          onGoToProfile={ensureProfile}
+          error={authError}
+          loadingProfile={loadingProfile}
         />
       )}
 

@@ -14,7 +14,8 @@ export function AuthCallback(props: { onAuthenticated: (user: User) => void }) {
       try {
         if (!supabase) throw new Error('SUPABASE_ENV_MISSING');
 
-        const code = new URLSearchParams(window.location.search).get('code');
+        const search = window.location.search || new URLSearchParams(window.location.hash.replace(/^#/, '')).toString();
+        const code = new URLSearchParams(search).get('code');
         if (!code) throw new Error('OAUTH_CODE_MISSING');
 
         const { data, error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
