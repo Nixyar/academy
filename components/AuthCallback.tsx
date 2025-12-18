@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { supabase } from '../services/supabaseClient';
 import { me, setSession } from '../services/authApi';
 import { userFromProfile } from '../services/userFromProfile';
@@ -6,8 +6,11 @@ import type { User } from '../types';
 
 export function AuthCallback(props: { onAuthenticated: (user: User) => void }) {
   const [error, setError] = useState<string | null>(null);
+  const hasRunRef = useRef(false);
 
   useEffect(() => {
+    if (hasRunRef.current) return;
+    hasRunRef.current = true;
     let cancelled = false;
 
     async function run() {
@@ -67,4 +70,3 @@ export function AuthCallback(props: { onAuthenticated: (user: User) => void }) {
     </div>
   );
 }
-
