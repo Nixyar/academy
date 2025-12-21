@@ -32,7 +32,8 @@ export function AuthCallback(props: { onAuthenticated: (user: User) => void }) {
         if (cancelled) return;
         props.onAuthenticated(user);
 
-        window.history.replaceState({}, '', '/');
+        // Force navigation off the callback route to avoid being stuck on the spinner
+        window.location.replace('/');
       } catch (e: any) {
         if (cancelled) return;
         const message =
