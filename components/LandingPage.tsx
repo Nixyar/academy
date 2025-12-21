@@ -5,9 +5,7 @@ import {Play, Code, Zap, Rocket, CheckCircle, Sparkles, Terminal, Shield} from '
 interface LandingPageProps {
   courses: Course[];
   user: User | null;
-  coursesLoading?: boolean;
-  coursesError?: string | null;
-  onSelectCourse: (courseId: string) => void | Promise<void>;
+  onSelectCourse: (courseId: string) => void;
   onSubscribe: () => void;
   onOpenAuth: (mode: 'login' | 'register') => void;
   onGoToProfile: () => void;
@@ -15,8 +13,6 @@ interface LandingPageProps {
 
 export const LandingPage: React.FC<LandingPageProps> = ({
   courses,
-  coursesLoading,
-  coursesError,
   user,
   onSelectCourse,
   onSubscribe,
@@ -24,12 +20,11 @@ export const LandingPage: React.FC<LandingPageProps> = ({
   onGoToProfile,
 }) => {
   const isSubscribed = user?.isSubscribed || false;
-  const hasCourses = courses.length > 0;
 
   const handleHeroAction = () => {
-    if (user && hasCourses) {
+    if (user) {
       onSelectCourse(courses[0].id);
-    } else if (!user) {
+    } else {
       onOpenAuth('login');
     }
   };
@@ -231,25 +226,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
             </h2>
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-              {coursesLoading && (
-                  <div className="col-span-full text-center text-slate-400 text-sm bg-white/5 border border-white/10 rounded-2xl py-6">
-                    Курсы загружаются…
-                  </div>
-              )}
-
-              {!coursesLoading && coursesError && (
-                  <div className="col-span-full text-center text-red-300 text-sm bg-red-500/10 border border-red-500/20 rounded-2xl py-6">
-                    {coursesError}
-                  </div>
-              )}
-
-              {!coursesLoading && !coursesError && courses.length === 0 && (
-                  <div className="col-span-full text-center text-slate-400 text-sm bg-white/5 border border-white/10 rounded-2xl py-6">
-                    Курсы скоро появятся. Мы уже готовим контент.
-                  </div>
-              )}
-
-              {!coursesLoading && !coursesError && courses.map(course => (
+              {courses.map(course => (
                   <div key={course.id}
                        className="group relative rounded-3xl overflow-hidden bg-glass border border-white/5 hover:border-white/20 transition-all duration-300">
 

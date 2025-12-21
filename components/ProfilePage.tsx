@@ -5,22 +5,12 @@ import { Zap, Crown, BookOpen, Clock, LogOut, ChevronRight, Play, Sparkles } fro
 interface ProfilePageProps {
   user: User;
   courses: Course[];
-  isLoadingCourses?: boolean;
-  coursesError?: string | null;
   onLogout: () => void;
   onContinueCourse: (courseId: string) => void;
   onSubscribe: () => void;
 }
 
-export const ProfilePage: React.FC<ProfilePageProps> = ({
-  user,
-  courses,
-  isLoadingCourses,
-  coursesError,
-  onLogout,
-  onContinueCourse,
-  onSubscribe,
-}) => {
+export const ProfilePage: React.FC<ProfilePageProps> = ({ user, courses, onLogout, onContinueCourse, onSubscribe }) => {
   
   // Calculate mock stats
   const coursesInProgress = Object.keys(user.progress).length;
@@ -128,79 +118,59 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
             Продолжить обучение
         </h2>
 
-        {isLoadingCourses && (
-            <div className="bg-white/5 border border-white/10 rounded-2xl p-6 text-slate-400 text-sm mb-12">
-                Курсы загружаются…
-            </div>
-        )}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-12">
+            {courses.map(course => {
+                const progress = user.progress[course.id] || 0; // index of last lesson
+                const totalLessons = course.lessons.length;
+                const percent = totalLessons > 0 ? Math.round(((progress) / totalLessons) * 100) : 0;
+                const isStarted = user.progress[course.id] !== undefined;
 
-        {!isLoadingCourses && coursesError && (
-            <div className="bg-red-500/10 border border-red-500/20 rounded-2xl p-6 text-red-200 text-sm mb-12">
-                {coursesError}
-            </div>
-        )}
-
-        {!isLoadingCourses && !coursesError && (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-12">
-                {courses.length === 0 ? (
-                    <div className="col-span-full bg-white/5 border border-white/10 rounded-2xl p-6 text-slate-400 text-sm text-center">
-                        Курсы скоро появятся. Мы уже готовим новые модули.
-                    </div>
-                ) : (
-                    courses.map(course => {
-                        const progress = user.progress[course.id] || 0; // index of last lesson
-                        const totalLessons = course.lessons.length;
-                        const percent = totalLessons > 0 ? Math.round(((progress) / totalLessons) * 100) : 0;
-                        const isStarted = user.progress[course.id] !== undefined;
-
-                        return (
-                            <div key={course.id} className="group bg-glass border border-white/5 rounded-2xl overflow-hidden hover:border-vibe-500/30 transition-all hover:-translate-y-1 hover:shadow-2xl hover:shadow-vibe-900/10">
-                                <div className="h-40 bg-slate-800 relative overflow-hidden">
-                                     <img src={course.thumbnail} alt="" className="w-full h-full object-cover opacity-60 group-hover:opacity-80 transition-opacity duration-500 group-hover:scale-105" />
-                                     <div className="absolute inset-0 bg-gradient-to-t from-[#030712] via-[#030712]/50 to-transparent"></div>
-                                     {user.isSubscribed || course.isFree ? (
-                                        <div className="absolute top-3 right-3 bg-green-500/20 backdrop-blur-md text-green-400 text-[10px] font-bold px-2 py-1 rounded border border-green-500/20">
-                                            ДОСТУПНО
-                                        </div>
-                                     ) : (
-                                        <div className="absolute top-3 right-3 bg-red-500/20 backdrop-blur-md text-red-400 text-[10px] font-bold px-2 py-1 rounded border border-red-500/20">
-                                            ЗАКРЫТО
-                                        </div>
-                                     )}
+                return (
+                    <div key={course.id} className="group bg-glass border border-white/5 rounded-2xl overflow-hidden hover:border-vibe-500/30 transition-all hover:-translate-y-1 hover:shadow-2xl hover:shadow-vibe-900/10">
+                        <div className="h-40 bg-slate-800 relative overflow-hidden">
+                             <img src={course.thumbnail} alt="" className="w-full h-full object-cover opacity-60 group-hover:opacity-80 transition-opacity duration-500 group-hover:scale-105" />
+                             <div className="absolute inset-0 bg-gradient-to-t from-[#030712] via-[#030712]/50 to-transparent"></div>
+                             {user.isSubscribed || course.isFree ? (
+                                <div className="absolute top-3 right-3 bg-green-500/20 backdrop-blur-md text-green-400 text-[10px] font-bold px-2 py-1 rounded border border-green-500/20">
+                                    ДОСТУПНО
                                 </div>
-                                <div className="p-6">
-                                    <h3 className="font-bold font-display text-xl mb-3 truncate group-hover:text-vibe-400 transition-colors">{course.title}</h3>
-                                    
-                                    {/* Progress Bar */}
-                                    <div className="flex items-center justify-between text-xs text-slate-400 mb-2 font-medium">
-                                        <span>Прогресс</span>
-                                        <span>{percent}%</span>
-                                    </div>
-                                    <div className="w-full h-1.5 bg-white/5 rounded-full mb-6 overflow-hidden">
-                                        <div 
-                                            className="h-full bg-gradient-to-r from-vibe-500 to-purple-500 rounded-full transition-all duration-1000 shadow-[0_0_10px_rgba(14,165,233,0.5)]"
-                                            style={{ width: `${Math.max(5, percent)}%` }}
-                                        ></div>
-                                    </div>
-
-                                    <button 
-                                        onClick={() => onContinueCourse(course.id)}
-                                        className={`w-full py-3.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all
-                                            ${isStarted 
-                                                ? 'bg-white/5 hover:bg-white/10 text-white border border-white/10' 
-                                                : 'bg-gradient-to-r from-vibe-600 to-purple-600 hover:from-vibe-500 hover:to-purple-500 text-white shadow-lg shadow-vibe-900/20'}
-                                        `}
-                                    >
-                                        {isStarted ? 'Продолжить' : 'Начать курс'}
-                                        {isStarted ? <ChevronRight className="w-4 h-4" /> : <Play className="w-4 h-4 fill-current" />}
-                                    </button>
+                             ) : (
+                                <div className="absolute top-3 right-3 bg-red-500/20 backdrop-blur-md text-red-400 text-[10px] font-bold px-2 py-1 rounded border border-red-500/20">
+                                    ЗАКРЫТО
                                 </div>
+                             )}
+                        </div>
+                        <div className="p-6">
+                            <h3 className="font-bold font-display text-xl mb-3 truncate group-hover:text-vibe-400 transition-colors">{course.title}</h3>
+                            
+                            {/* Progress Bar */}
+                            <div className="flex items-center justify-between text-xs text-slate-400 mb-2 font-medium">
+                                <span>Прогресс</span>
+                                <span>{percent}%</span>
                             </div>
-                        )
-                    })
-                )}
-            </div>
-        )}
+                            <div className="w-full h-1.5 bg-white/5 rounded-full mb-6 overflow-hidden">
+                                <div 
+                                    className="h-full bg-gradient-to-r from-vibe-500 to-purple-500 rounded-full transition-all duration-1000 shadow-[0_0_10px_rgba(14,165,233,0.5)]"
+                                    style={{ width: `${Math.max(5, percent)}%` }}
+                                ></div>
+                            </div>
+
+                            <button 
+                                onClick={() => onContinueCourse(course.id)}
+                                className={`w-full py-3.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all
+                                    ${isStarted 
+                                        ? 'bg-white/5 hover:bg-white/10 text-white border border-white/10' 
+                                        : 'bg-gradient-to-r from-vibe-600 to-purple-600 hover:from-vibe-500 hover:to-purple-500 text-white shadow-lg shadow-vibe-900/20'}
+                                `}
+                            >
+                                {isStarted ? 'Продолжить' : 'Начать курс'}
+                                {isStarted ? <ChevronRight className="w-4 h-4" /> : <Play className="w-4 h-4 fill-current" />}
+                            </button>
+                        </div>
+                    </div>
+                )
+            })}
+        </div>
 
         <div className="border-t border-white/5 pt-6 mt-2 flex justify-center">
             <div className="flex items-center gap-3 text-slate-400 text-sm font-medium">

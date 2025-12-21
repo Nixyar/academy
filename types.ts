@@ -1,6 +1,5 @@
 export interface Course {
   id: string;
-  slug?: string;
   title: string;
   description: string;
   thumbnail: string;
@@ -17,12 +16,10 @@ export enum LessonType {
 
 export interface Lesson {
   id: string;
-  slug?: string;
   title: string;
   description: string; // Markdown supported
   videoUrl?: string;
   type: LessonType;
-  sortOrder?: number | null;
   initialCode?: string; // For code gen lessons
 }
 

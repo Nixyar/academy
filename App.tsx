@@ -4,62 +4,88 @@ import { CourseViewer } from './components/CourseViewer';
 import { AuthModal } from './components/AuthModal';
 import { ProfilePage } from './components/ProfilePage';
 import { AuthCallback } from './components/AuthCallback';
-import { Course, Lesson, LessonType, User } from './types';
+import { Course, LessonType, User } from './types';
 import { logout, me } from './services/authApi';
 import { userFromProfile } from './services/userFromProfile';
-import { BackendCourse, BackendLesson, fetchCourses, fetchLessonsByCourse } from './services/coursesApi';
 
-const DEFAULT_COURSE_COVER =
-  'https://images.unsplash.com/photo-1553877522-43269d4ea984?w=1200&auto=format&fit=crop&q=80';
+// Mock Data
+const MOCK_COURSES: Course[] = [
+  {
+    id: 'course-1',
+    title: 'Основы Vibe Coding 🚀',
+    description: 'Научитесь основам взаимодействия с ИИ. Первый шаг в мир быстрой разработки. Включает работу с анализом и редактированием.',
+    thumbnail: 'https://picsum.photos/400/250',
+    isFree: true,
+    lessons: [
+      {
+        id: 'l1',
+        title: 'Что такое Vibe Coding?',
+        type: LessonType.VIDEO_TEXT,
+        videoUrl: 'placeholder',
+        description: `
+        # Добро пожаловать в эру Vibe Coding
 
-function mapLessonType(raw: string | null | undefined): LessonType {
-  const normalized = (raw ?? '').toLowerCase();
-  if (normalized.includes('analysis')) return LessonType.INTERACTIVE_ANALYSIS;
-  if (normalized.includes('edit')) return LessonType.INTERACTIVE_EDIT;
-  if (normalized.includes('code')) return LessonType.CODE_GENERATION;
-  return LessonType.VIDEO_TEXT;
-}
+        **Vibe Coding** — это не просто написание кода, это состояние потока, усиленное искусственным интеллектом.
+        
+        Вместо того чтобы тратить часы на поиск пропущенной запятой, вы управляете процессом, как дирижер оркестром. Ваши инструменты — это современные LLM, такие как Gemini.
 
-function extractLessonDescription(blocks: BackendLesson['blocks']): string {
-  if (!blocks || !Array.isArray(blocks)) return '';
-  const textBlock = blocks.find((block) => block?.type === 'text' && typeof block.value === 'string');
-  if (textBlock && typeof textBlock.value === 'string') return textBlock.value;
-  const firstStringBlock = blocks.find((block) => typeof block.value === 'string');
-  if (firstStringBlock && typeof firstStringBlock.value === 'string') return firstStringBlock.value;
-  return '';
-}
-
-function mapLessonFromBackend(lesson: BackendLesson): Lesson {
-  const description = extractLessonDescription(lesson.blocks) || 'Материалы урока скоро появятся.';
-  return {
-    id: lesson.id,
-    slug: lesson.slug,
-    title: lesson.title,
-    description,
-    type: mapLessonType(lesson.lesson_type),
-    sortOrder: lesson.sort_order,
-  };
-}
-
-function mapCourseFromBackend(course: BackendCourse): Course {
-  return {
-    id: course.id,
-    slug: course.slug,
-    title: course.title,
-    description: course.description ?? '',
-    thumbnail: course.cover_url || DEFAULT_COURSE_COVER,
-    isFree: (course.access ?? '').toLowerCase() === 'public',
-    lessons: [],
-  };
-}
+        В этом курсе мы разберем:
+        1. Как формулировать мысли для ИИ.
+        2. Как использовать мультимодальность (картинки, видео, аудио).
+        3. Как редактировать реальность с помощью Nano Banana.
+        
+        Нажмите "Следующий", чтобы перейти к практике.
+        `
+      },
+      {
+        id: 'l2',
+        title: 'Практика: Gemini 3 Pro Vision',
+        type: LessonType.INTERACTIVE_ANALYSIS,
+        description: `
+        # ИИ видит мир
+        
+        Модель **Gemini 3 Pro** обладает уникальной способностью "понимать" изображения.
+        
+        **Задание:**
+        1. Загрузите любую фотографию (интерфейс, схема, пейзаж).
+        2. В поле промпта справа спросите: *"Как бы ты сверстал этот интерфейс?"* или *"Опиши настроение этого фото"*.
+        3. Посмотрите, как точно ИИ анализирует детали.
+        
+        Это ключевой навык для Vibe Coder'а: превращать визуал в код или текст мгновенно.
+        `
+      },
+      {
+        id: 'l3',
+        title: 'Магия: Nano Banana Editor',
+        type: LessonType.INTERACTIVE_EDIT,
+        description: `
+        # Редактирование реальности
+        
+        Используя модель **Gemini 2.5 Flash Image** (кодовое имя "Nano Banana"), мы можем менять изображения, просто описывая желания текстом.
+        
+        **Задание:**
+        1. Загрузите фото.
+        2. Напишите промпт на английском (модель лучше понимает его) или русском: *"Add sunglasses"* (Добавь очки) или *"Make it cyberpank style"* (Сделай стиль киберпанк).
+        3. Нажмите кнопку магии.
+        
+        Это позволяет быстро создавать ассеты для ваших приложений, не открывая Photoshop.
+        `
+      }
+    ]
+  },
+  {
+    id: 'course-2',
+    title: 'Продвинутые Паттерны ⚡',
+    description: 'Глубокое погружение в архитектуру приложений с ИИ. Создание сложных систем.',
+    thumbnail: 'https://picsum.photos/400/251',
+    isFree: false,
+    lessons: []
+  }
+];
 
 const App: React.FC = () => {
   const [currentView, setCurrentView] = useState<'landing' | 'course' | 'profile'>('landing');
   const [selectedCourseId, setSelectedCourseId] = useState<string | null>(null);
-  const [courses, setCourses] = useState<Course[]>([]);
-  const [coursesLoading, setCoursesLoading] = useState(false);
-  const [coursesError, setCoursesError] = useState<string | null>(null);
-  const [loadingCourseId, setLoadingCourseId] = useState<string | null>(null);
   
   // Auth State
   const [user, setUser] = useState<User | null>(null);
@@ -72,36 +98,6 @@ const App: React.FC = () => {
     setAuthMode(mode);
     setAuthModalOpen(true);
   };
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadCourses() {
-      setCoursesLoading(true);
-      setCoursesError(null);
-      try {
-        const backendCourses = await fetchCourses('active');
-        if (cancelled) return;
-        setCourses(backendCourses.map(mapCourseFromBackend));
-      } catch (error) {
-        if (cancelled) return;
-        const rawMessage = error instanceof Error ? error.message : 'Не удалось загрузить курсы';
-        const friendlyMessage =
-          rawMessage === 'FAILED_TO_FETCH_COURSES'
-            ? 'Не удалось загрузить курсы. Попробуйте позже.'
-            : rawMessage;
-        setCoursesError(friendlyMessage);
-      } finally {
-        if (cancelled) return;
-        setCoursesLoading(false);
-      }
-    }
-
-    void loadCourses();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   useEffect(() => {
     if (currentView !== 'profile' || user || hasFetchedProfile) return;
@@ -127,34 +123,6 @@ const App: React.FC = () => {
     };
   }, [currentView, hasFetchedProfile, user]);
 
-  const loadLessonsForCourse = async (courseId: string): Promise<boolean> => {
-    const course = courses.find((c) => c.id === courseId);
-    if (!course) return false;
-    if (course.lessons.length > 0) return true;
-
-    setLoadingCourseId(courseId);
-    try {
-      const backendLessons = await fetchLessonsByCourse(courseId);
-      const mappedLessons = backendLessons.map(mapLessonFromBackend);
-      setCourses((prev) =>
-        prev.map((c) => (c.id === courseId ? { ...c, lessons: mappedLessons } : c)),
-      );
-      return true;
-    } catch (error) {
-      const message =
-        error instanceof Error && error.message === 'FAILED_TO_FETCH_LESSONS'
-          ? 'Не удалось загрузить уроки'
-          : error instanceof Error
-            ? error.message
-            : 'Не удалось загрузить уроки';
-      console.error(message);
-      alert('Не удалось загрузить уроки курса. Попробуйте позже.');
-      return false;
-    } finally {
-      setLoadingCourseId((prev) => (prev === courseId ? null : prev));
-    }
-  };
-
   const handleAuthenticated = (authedUser: User) => {
     setUser(authedUser);
     setCurrentView('profile');
@@ -171,25 +139,20 @@ const App: React.FC = () => {
     setCurrentView('landing');
   };
 
-  const handleSelectCourse = async (courseId: string) => {
+  const handleSelectCourse = (courseId: string) => {
     // If user is not logged in, ask them to login first
     if (!user) {
         handleOpenAuth('register');
         return;
     }
 
-    if (loadingCourseId === courseId) return;
-
-    const course = courses.find(c => c.id === courseId);
+    const course = MOCK_COURSES.find(c => c.id === courseId);
     if (!course) return;
 
     if (!course.isFree && !user.isSubscribed) {
       alert("Этот курс доступен только по подписке! Пожалуйста, оформите Vibe Pro.");
       return;
     }
-
-    const lessonsReady = await loadLessonsForCourse(courseId);
-    if (!lessonsReady) return;
 
     setSelectedCourseId(courseId);
     setCurrentView('course');
@@ -207,7 +170,7 @@ const App: React.FC = () => {
     }
   };
 
-  const activeCourse = courses.find(c => c.id === selectedCourseId);
+  const activeCourse = MOCK_COURSES.find(c => c.id === selectedCourseId);
 
   const isAuthCallback = window.location.pathname === '/auth/callback' || window.location.pathname.startsWith('/auth/callback/');
   if (isAuthCallback) {
@@ -240,11 +203,9 @@ const App: React.FC = () => {
 
       {currentView === 'landing' && (
         <LandingPage 
-          courses={courses} 
-          coursesLoading={coursesLoading}
-          coursesError={coursesError}
+          courses={MOCK_COURSES} 
           user={user}
-          onSelectCourse={(courseId) => { void handleSelectCourse(courseId); }} 
+          onSelectCourse={handleSelectCourse} 
           onSubscribe={handleSubscribe}
           onOpenAuth={handleOpenAuth}
           onGoToProfile={() => setCurrentView('profile')}
@@ -254,11 +215,12 @@ const App: React.FC = () => {
       {currentView === 'profile' && user && (
           <ProfilePage 
             user={user}
-            courses={courses}
-            isLoadingCourses={coursesLoading}
-            coursesError={coursesError}
+            courses={MOCK_COURSES}
             onLogout={handleLogout}
-            onContinueCourse={(id) => { void handleSelectCourse(id); }}
+            onContinueCourse={(id) => {
+                setSelectedCourseId(id);
+                setCurrentView('course');
+            }}
             onSubscribe={handleSubscribe}
           />
       )}
