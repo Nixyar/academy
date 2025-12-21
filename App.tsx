@@ -60,6 +60,10 @@ const App: React.FC = () => {
   const [coursesLoading, setCoursesLoading] = useState(false);
   const [coursesError, setCoursesError] = useState<string | null>(null);
   const [loadingCourseId, setLoadingCourseId] = useState<string | null>(null);
+  const [authHandled, setAuthHandled] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return window.sessionStorage.getItem('auth:handled') === '1';
+  });
   
   // Auth State
   const [user, setUser] = useState<User | null>(null);
@@ -159,6 +163,12 @@ const App: React.FC = () => {
     setUser(authedUser);
     setCurrentView('profile');
     setAuthModalOpen(false);
+    setAuthHandled(true);
+    try {
+      window.sessionStorage.setItem('auth:handled', '1');
+    } catch {
+      // ignore storage errors
+    }
   };
 
   const handleLogout = async () => {
@@ -169,6 +179,11 @@ const App: React.FC = () => {
     }
     setUser(null);
     setCurrentView('landing');
+    try {
+      window.sessionStorage.removeItem('auth:handled');
+    } catch {
+      // ignore storage errors
+    }
   };
 
   const handleSelectCourse = async (courseId: string) => {
@@ -209,13 +224,22 @@ const App: React.FC = () => {
 
   const activeCourse = courses.find(c => c.id === selectedCourseId);
 
-  const isAuthCallback = window.location.pathname === '/auth/callback' || window.location.pathname.startsWith('/auth/callback/');
-  if (isAuthCallback) {
+  const isAuthCallbackRoute =
+    window.location.pathname === '/auth/callback' ||
+    window.location.pathname.startsWith('/auth/callback/');
+  const hasAuthCode = new URLSearchParams(window.location.search).has('code');
+  const shouldRenderAuthCallback = isAuthCallbackRoute && hasAuthCode && !authHandled;
+
+  useEffect(() => {
+    if (isAuthCallbackRoute && (!hasAuthCode || authHandled)) {
+      window.history.replaceState(null, '', '/');
+    }
+  }, [authHandled, hasAuthCode, isAuthCallbackRoute]);
+  if (shouldRenderAuthCallback) {
     return (
       <AuthCallback
         onAuthenticated={(authedUser) => {
-          setUser(authedUser);
-          setCurrentView('profile');
+          handleAuthenticated(authedUser);
         }}
       />
     );
