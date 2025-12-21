@@ -15,6 +15,28 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({ course, onBack, isSu
   const activeLesson = course.lessons[activeLessonIndex];
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
+  if (!course.lessons.length) {
+    return (
+      <div className="h-screen w-screen flex flex-col bg-void text-white overflow-hidden font-sans">
+        <header className="h-16 border-b border-white/5 bg-[#050914] flex items-center justify-between px-4 shrink-0 z-30">
+          <div className="flex items-center gap-4">
+              <button 
+                  onClick={onBack} 
+                  className="flex items-center gap-2 text-slate-400 hover:text-white transition-colors text-sm font-bold uppercase tracking-wider hover:bg-white/5 px-3 py-1.5 rounded-lg"
+              >
+                  <ChevronLeft className="w-4 h-4" /> Назад
+              </button>
+              <div className="h-6 w-px bg-white/10 mx-2 hidden md:block"></div>
+              <h1 className="font-bold text-lg hidden md:block font-display tracking-tight text-slate-200">{course.title}</h1>
+          </div>
+        </header>
+        <div className="flex-1 flex items-center justify-center text-slate-400 text-sm px-6 text-center">
+          Контент курса появится скоро. Попробуйте обновить страницу позже.
+        </div>
+      </div>
+    );
+  }
+
   // Mock function to render video placeholder
   const renderVideo = (url?: string) => (
     <div className="aspect-video bg-black rounded-xl mb-6 flex items-center justify-center relative overflow-hidden group border border-white/10 shadow-2xl">
