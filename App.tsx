@@ -60,6 +60,7 @@ const App: React.FC = () => {
   const [coursesLoading, setCoursesLoading] = useState(false);
   const [coursesError, setCoursesError] = useState<string | null>(null);
   const [loadingCourseId, setLoadingCourseId] = useState<string | null>(null);
+  const [authHandled, setAuthHandled] = useState(false);
   
   // Auth State
   const [user, setUser] = useState<User | null>(null);
@@ -159,6 +160,7 @@ const App: React.FC = () => {
     setUser(authedUser);
     setCurrentView('profile');
     setAuthModalOpen(false);
+    setAuthHandled(true);
   };
 
   const handleLogout = async () => {
@@ -209,13 +211,15 @@ const App: React.FC = () => {
 
   const activeCourse = courses.find(c => c.id === selectedCourseId);
 
-  const isAuthCallback = window.location.pathname === '/auth/callback' || window.location.pathname.startsWith('/auth/callback/');
-  if (isAuthCallback) {
+  const isAuthCallbackRoute =
+    window.location.pathname === '/auth/callback' ||
+    window.location.pathname.startsWith('/auth/callback/');
+  const shouldRenderAuthCallback = isAuthCallbackRoute && !authHandled;
+  if (shouldRenderAuthCallback) {
     return (
       <AuthCallback
         onAuthenticated={(authedUser) => {
-          setUser(authedUser);
-          setCurrentView('profile');
+          handleAuthenticated(authedUser);
         }}
       />
     );
