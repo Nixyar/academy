@@ -32,8 +32,8 @@ export function AuthCallback(props: { onAuthenticated: (user: User) => void }) {
         if (cancelled) return;
         props.onAuthenticated(user);
 
-        // Force navigation off the callback route to avoid being stuck on the spinner
-        window.location.replace('/');
+        // Replace the URL without a full reload so the main app can render the profile screen
+        window.history.replaceState(null, '', '/');
       } catch (e: any) {
         if (cancelled) return;
         const message =
