@@ -13,6 +13,12 @@ export default defineConfig(({ mode }) => {
             target: env.VITE_API_BASE_URL || 'https://api.vibecoderai.ru',
             changeOrigin: true,
             secure: true,
+            // Strip dev Origin header so backend allowlist (vibecoderai.ru) does not reject localhost with 500
+            configure: (proxy) => {
+              proxy.on('proxyReq', (proxyReq) => {
+                proxyReq.removeHeader('origin');
+              });
+            },
           },
         },
       },
