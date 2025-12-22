@@ -5,7 +5,7 @@ import {Play, Code, Zap, Rocket, CheckCircle, Sparkles, Terminal, Shield} from '
 interface LandingPageProps {
   courses: Course[];
   user: User | null;
-  onSelectCourse: (courseId: string) => void;
+  onSelectCourse: (courseId: string) => void | Promise<void>;
   onSubscribe: () => void;
   onOpenAuth: (mode: 'login' | 'register') => void;
   onGoToProfile: () => void;
@@ -23,7 +23,9 @@ export const LandingPage: React.FC<LandingPageProps> = ({
 
   const handleHeroAction = () => {
     if (user) {
-      onSelectCourse(courses[0].id);
+      if (courses.length > 0) {
+        onSelectCourse(courses[0].id);
+      }
     } else {
       onOpenAuth('login');
     }
@@ -232,7 +234,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
 
                     {/* Image BG Overlay */}
                     <div className="absolute inset-0 z-0">
-                      <img src={course.thumbnail} alt=""
+                      <img src={course.coverUrl || 'https://placehold.co/600x400/0b1120/FFFFFF?text=Course'} alt=""
                            className="w-full h-full object-cover opacity-30 group-hover:scale-105 transition-transform duration-700"/>
                       <div
                           className="absolute inset-0 bg-gradient-to-t from-void via-void/90 to-void/40"></div>

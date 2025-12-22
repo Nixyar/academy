@@ -6,7 +6,7 @@ interface ProfilePageProps {
   user: User;
   courses: Course[];
   onLogout: () => void;
-  onContinueCourse: (courseId: string) => void;
+  onContinueCourse: (courseId: string) => void | Promise<void>;
   onSubscribe: () => void;
 }
 
@@ -128,7 +128,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, courses, onLogou
                 return (
                     <div key={course.id} className="group bg-glass border border-white/5 rounded-2xl overflow-hidden hover:border-vibe-500/30 transition-all hover:-translate-y-1 hover:shadow-2xl hover:shadow-vibe-900/10">
                         <div className="h-40 bg-slate-800 relative overflow-hidden">
-                             <img src={course.thumbnail} alt="" className="w-full h-full object-cover opacity-60 group-hover:opacity-80 transition-opacity duration-500 group-hover:scale-105" />
+                             <img src={course.coverUrl || 'https://placehold.co/600x400/0b1120/FFFFFF?text=Course'} alt="" className="w-full h-full object-cover opacity-60 group-hover:opacity-80 transition-opacity duration-500 group-hover:scale-105" />
                              <div className="absolute inset-0 bg-gradient-to-t from-[#030712] via-[#030712]/50 to-transparent"></div>
                              {user.isSubscribed || course.isFree ? (
                                 <div className="absolute top-3 right-3 bg-green-500/20 backdrop-blur-md text-green-400 text-[10px] font-bold px-2 py-1 rounded border border-green-500/20">

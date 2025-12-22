@@ -1,8 +1,12 @@
 export interface Course {
   id: string;
+  slug: string;
   title: string;
-  description: string;
-  thumbnail: string;
+  description: string | null;
+  coverUrl: string | null;
+  access?: string | null;
+  status?: string | null;
+  sortOrder?: number | null;
   isFree: boolean;
   lessons: Lesson[];
 }
@@ -16,10 +20,14 @@ export enum LessonType {
 
 export interface Lesson {
   id: string;
+  courseId: string;
+  slug: string;
   title: string;
   description: string; // Markdown supported
-  videoUrl?: string;
+  videoUrl?: string | null;
   type: LessonType;
+  sortOrder?: number | null;
+  blocks?: unknown;
   initialCode?: string; // For code gen lessons
 }
 
