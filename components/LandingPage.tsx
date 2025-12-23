@@ -61,8 +61,16 @@ export const LandingPage: React.FC<LandingPageProps> = ({
 
               <div className="hidden md:flex items-center gap-8">
                 <div className="flex items-baseline space-x-8">
-                  <a href="#courses"
-                     className="text-sm font-medium text-slate-300 hover:text-white hover:drop-shadow-[0_0_8px_rgba(255,255,255,0.5)] transition-all">Курсы</a>
+                  <a
+                    href="#courses"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      document.getElementById('courses')?.scrollIntoView({ behavior: 'smooth' });
+                    }}
+                    className="text-sm font-medium text-slate-300 hover:text-white hover:drop-shadow-[0_0_8px_rgba(255,255,255,0.5)] transition-all"
+                  >
+                    Курсы
+                  </a>
                 </div>
 
                 {user && (
@@ -104,10 +112,10 @@ export const LandingPage: React.FC<LandingPageProps> = ({
           </div>
 
           <h1 className="max-w-6xl mx-auto text-5xl md:text-7xl font-bold font-display tracking-tighter leading-[1.1] mb-8">
-            Пиши код со скоростью мысли.<br/>
+            Мышление — твоё.<br/>
             <span
                 className="transparent-text bg-clip-text text-transparent bg-gradient-to-r from-vibe-glow via-purple-glow to-pink-glow animate-gradient bg-[length:200%_auto] drop-shadow-[0_0_30px_rgba(188,19,254,0.3)]">
-            AI делает остальное.
+            Исполнение за AI.
           </span>
           </h1>
 
