@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { X, Mail, Lock, User as UserIcon, ArrowRight, Loader2, Chrome } from 'lucide-react';
 import { supabase } from '../services/supabaseClient';
 import { me, loginWithEmail, registerWithEmail } from '../services/authApi';
@@ -24,22 +24,47 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
   const [loading, setLoading] = useState(false);
+  const [oauthInProgress, setOauthInProgress] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!isOpen) return;
-    setMode(initialMode);
+  const resetForm = useCallback(() => {
+    setEmail('');
+    setPassword('');
+    setName('');
     setError(null);
     setInfo(null);
     setLoading(false);
-  }, [isOpen, initialMode]);
+    setOauthInProgress(false);
+    setMode(initialMode);
+  }, [initialMode]);
+
+  const handleClose = () => {
+    resetForm();
+    onClose();
+  };
+
+  useEffect(() => {
+    resetForm();
+  }, [isOpen, resetForm]);
+
+  useEffect(() => {
+    const handleFocus = () => {
+      if (!oauthInProgress) return;
+      setLoading(false);
+      setOauthInProgress(false);
+    };
+
+    window.addEventListener('focus', handleFocus);
+    return () => window.removeEventListener('focus', handleFocus);
+  }, [oauthInProgress]);
 
   if (!isOpen) return null;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
+    setOauthInProgress(false);
     setError(null);
     setInfo(null);
 
@@ -61,7 +86,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         throw err;
       }
       onAuthenticated(userFromProfile(profile));
-      onClose();
+      handleClose();
     } catch (e: any) {
       const message =
         e?.message || 'Ошибка авторизации.';
@@ -73,6 +98,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
   const handleGoogleLogin = async () => {
     setLoading(true);
+    setOauthInProgress(true);
     setError(null);
     setInfo(null);
 
@@ -93,6 +119,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           ? 'Не настроены переменные окружения Supabase (VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY).'
           : e?.message || 'Ошибка входа через Google.';
       setError(message);
+      setOauthInProgress(false);
       setLoading(false);
     }
   };
@@ -102,7 +129,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       {/* Backdrop */}
       <div 
         className="absolute inset-0 bg-[#030712]/90 backdrop-blur-md"
-        onClick={onClose}
       ></div>
 
       {/* Modal Card */}
@@ -112,7 +138,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         <div className="absolute -top-20 -right-20 w-40 h-40 bg-purple-500/10 rounded-full blur-3xl pointer-events-none"></div>
 
         <button 
-          onClick={onClose}
+          onClick={handleClose}
           className="absolute top-5 right-5 text-slate-400 hover:text-white transition-colors"
         >
           <X className="w-5 h-5" />

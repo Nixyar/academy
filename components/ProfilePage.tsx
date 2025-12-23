@@ -101,7 +101,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, courses, onLogou
                         {user.isSubscribed ? 'Vibe Pro Active' : 'Базовый доступ'}
                     </h3>
                     <p className="text-xs text-slate-400 mt-1 leading-relaxed">
-                        {user.isSubscribed ? 'Вам доступны все курсы, Nano Banana и Gemini 3 Pro.' : 'Перейдите на Pro для полного доступа к инструментам.'}
+                        {user.isSubscribed ? 'Вам доступны все курсы и увеличенный объем запросов к VibeCoderAi.' : 'Перейдите на Pro для полного доступа к инструментам.'}
                     </p>
                 </div>
                 {!user.isSubscribed && (

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { LandingPage } from './components/LandingPage';
 import { CourseViewer } from './components/CourseViewer';
 import { AuthModal } from './components/AuthModal';
@@ -6,22 +6,88 @@ import { ProfilePage } from './components/ProfilePage';
 import { AuthCallback } from './components/AuthCallback';
 import { Course, User } from './types';
 import { logout, me } from './services/authApi';
+import { clearSupabaseStoredSession, supabase } from './services/supabaseClient';
 import { userFromProfile } from './services/userFromProfile';
 import { fetchCourseLessons, fetchCourses } from './services/coursesApi';
 
+type View = 'landing' | 'course' | 'profile';
+
+type RouteState = {
+  view: View;
+  courseId: string | null;
+};
+
+const normalizeRoute = (route: RouteState): RouteState => {
+  if (route.view === 'course' && !route.courseId) {
+    return { view: 'landing', courseId: null };
+  }
+  return route;
+};
+
+const parseRouteFromLocation = (): RouteState => {
+  const path = window.location.pathname.replace(/^\//, '');
+  const segments = path.split('/').filter(Boolean);
+
+  if (segments[0] === 'profile') {
+    return { view: 'profile', courseId: null };
+  }
+
+  if (segments[0] === 'courses') {
+    return { view: 'course', courseId: segments[1] ?? null };
+  }
+
+  return { view: 'landing', courseId: null };
+};
+
+const routeToPath = (route: RouteState): string => {
+  if (route.view === 'profile') return '/profile';
+  if (route.view === 'course' && route.courseId) return `/courses/${route.courseId}`;
+  return '/';
+};
+
 const App: React.FC = () => {
-  const [currentView, setCurrentView] = useState<'landing' | 'course' | 'profile'>('landing');
-  const [selectedCourseId, setSelectedCourseId] = useState<string | null>(null);
+  const initialRoute = useMemo(() => normalizeRoute(parseRouteFromLocation()), []);
+  const [locationPath, setLocationPath] = useState(() => window.location.pathname);
+
+  const [route, setRoute] = useState<RouteState>(initialRoute);
+  const [currentView, setCurrentView] = useState<View>(
+    initialRoute.view === 'course' ? 'landing' : initialRoute.view,
+  );
+  const [selectedCourseId, setSelectedCourseId] = useState<string | null>(initialRoute.courseId);
+  const isAuthCallbackPath =
+    locationPath === '/auth/callback' || locationPath.startsWith('/auth/callback/');
   
   // Auth State
   const [user, setUser] = useState<User | null>(null);
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
-  const [bootstrapping, setBootstrapping] = useState(false);
+  const [bootstrapping, setBootstrapping] = useState(true);
   const [hasFetchedProfile, setHasFetchedProfile] = useState(false);
   const [courses, setCourses] = useState<Course[]>([]);
   const [lessonsLoadingFor, setLessonsLoadingFor] = useState<string | null>(null);
   const coursesLoadedRef = useRef(false);
+  const bootstrapPromiseRef = useRef<Promise<void> | null>(null);
+
+  const syncRoute = (next: RouteState) => {
+    const normalized = normalizeRoute(next);
+    setRoute(normalized);
+    const targetPath = routeToPath(normalized);
+    if (window.location.pathname !== targetPath) {
+      window.history.pushState({}, '', targetPath);
+    }
+  };
+
+  const navigateToLanding = () => {
+    setSelectedCourseId(null);
+    setCurrentView('landing');
+    syncRoute({ view: 'landing', courseId: null });
+  };
+
+  const navigateToProfile = () => {
+    setSelectedCourseId(null);
+    setCurrentView('profile');
+    syncRoute({ view: 'profile', courseId: null });
+  };
 
   const handleOpenAuth = (mode: 'login' | 'register') => {
     setAuthMode(mode);
@@ -45,47 +111,126 @@ const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (currentView !== 'profile' || user || hasFetchedProfile) return;
-    let cancelled = false;
-    async function loadProfile() {
+    const handleLocationChange = () => {
+      setLocationPath(window.location.pathname);
+      const parsed = normalizeRoute(parseRouteFromLocation());
+      setRoute(parsed);
+      setSelectedCourseId(parsed.courseId);
+    };
+
+    const originalPushState = window.history.pushState;
+    const originalReplaceState = window.history.replaceState;
+
+    const wrapHistoryMethod = (original: typeof window.history.pushState) => {
+      return (...args: Parameters<typeof window.history.pushState>) => {
+        const result = original.apply(window.history, args);
+        window.dispatchEvent(new Event('locationchange'));
+        return result;
+      };
+    };
+
+    window.history.pushState = wrapHistoryMethod(originalPushState);
+    window.history.replaceState = wrapHistoryMethod(originalReplaceState);
+
+    window.addEventListener('popstate', handleLocationChange);
+    window.addEventListener('locationchange', handleLocationChange);
+
+    return () => {
+      window.history.pushState = originalPushState;
+      window.history.replaceState = originalReplaceState;
+      window.removeEventListener('popstate', handleLocationChange);
+      window.removeEventListener('locationchange', handleLocationChange);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (bootstrapPromiseRef.current) return;
+
+    bootstrapPromiseRef.current = (async () => {
       setBootstrapping(true);
       try {
         const profile = await me();
-        if (cancelled) return;
         setUser(userFromProfile(profile));
-      } catch {
-        if (cancelled) return;
-        setUser(null);
-      } finally {
-        if (cancelled) return;
         setHasFetchedProfile(true);
+        const latestRoute = normalizeRoute(parseRouteFromLocation());
+        if (latestRoute.view === 'landing') {
+          navigateToProfile();
+        }
+      } catch {
+        setUser(null);
+        setHasFetchedProfile(true);
+        const latestRoute = normalizeRoute(parseRouteFromLocation());
+        if (latestRoute.view === 'profile') {
+          navigateToLanding();
+        }
+      } finally {
         setBootstrapping(false);
       }
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (bootstrapping) return;
+
+    if (route.view === 'profile') {
+      if (user) {
+        setCurrentView('profile');
+        setSelectedCourseId(null);
+      } else if (hasFetchedProfile) {
+        navigateToLanding();
+      }
+      return;
     }
-    void loadProfile();
-    return () => {
-      cancelled = true;
-    };
-  }, [currentView, hasFetchedProfile, user]);
+
+    if (route.view === 'course') {
+      if (route.courseId && user) {
+        void handleSelectCourse(route.courseId, { skipPathUpdate: true });
+      } else if (route.courseId && hasFetchedProfile && !user) {
+        navigateToLanding();
+      }
+      return;
+    }
+
+    setCurrentView('landing');
+    setSelectedCourseId(null);
+  }, [route, user, hasFetchedProfile, bootstrapping, courses]);
+
+  useEffect(() => {
+    if (isAuthCallbackPath) return;
+    const targetPath = routeToPath(route);
+    if (window.location.pathname !== targetPath) {
+      window.history.replaceState({}, '', targetPath);
+    }
+  }, [route, isAuthCallbackPath]);
 
   const handleAuthenticated = (authedUser: User) => {
     setUser(authedUser);
-    setCurrentView('profile');
+    setHasFetchedProfile(true);
+    navigateToProfile();
     setAuthModalOpen(false);
   };
 
   const handleLogout = async () => {
     try {
       await logout();
+      if (supabase) {
+        await supabase.auth.signOut();
+      }
+      clearSupabaseStoredSession();
     } catch {
       // ignore
     }
     setUser(null);
-    setCurrentView('landing');
+    setHasFetchedProfile(true);
+    navigateToLanding();
   };
 
-  const handleSelectCourse = async (courseId: string) => {
+  const handleSelectCourse = async (
+    courseId: string,
+    options?: { skipPathUpdate?: boolean },
+  ) => {
     if (!user) {
+      navigateToLanding();
       handleOpenAuth('register');
       return;
     }
@@ -116,6 +261,9 @@ const App: React.FC = () => {
 
     setSelectedCourseId(courseId);
     setCurrentView('course');
+    if (!options?.skipPathUpdate) {
+      syncRoute({ view: 'course', courseId });
+    }
   };
 
   const handleSubscribe = () => {
@@ -133,13 +281,12 @@ const App: React.FC = () => {
   const activeCourse = courses.find(c => c.id === selectedCourseId);
   const isLessonsLoading = lessonsLoadingFor === selectedCourseId;
 
-  const isAuthCallback = window.location.pathname === '/auth/callback' || window.location.pathname.startsWith('/auth/callback/');
-  if (isAuthCallback) {
+  if (isAuthCallbackPath) {
     return (
       <AuthCallback
         onAuthenticated={(authedUser) => {
           setUser(authedUser);
-          setCurrentView('profile');
+          navigateToProfile();
         }}
       />
     );
@@ -169,7 +316,7 @@ const App: React.FC = () => {
           onSelectCourse={handleSelectCourse} 
           onSubscribe={handleSubscribe}
           onOpenAuth={handleOpenAuth}
-          onGoToProfile={() => setCurrentView('profile')}
+          onGoToProfile={navigateToProfile}
         />
       )}
 
@@ -193,7 +340,7 @@ const App: React.FC = () => {
         ) : activeCourse && activeCourse.lessons.length > 0 ? (
           <CourseViewer 
             course={activeCourse} 
-            onBack={() => setCurrentView('profile')}
+            onBack={navigateToProfile}
             isSubscribed={user.isSubscribed}
           />
         ) : (
@@ -201,7 +348,7 @@ const App: React.FC = () => {
             <div>
               <div className="text-slate-200 font-semibold mb-2">Не удалось загрузить уроки курса</div>
               <button
-                onClick={() => setCurrentView('profile')}
+                onClick={navigateToProfile}
                 className="mt-3 px-4 py-2 rounded-lg border border-white/10 text-slate-300 hover:bg-white/5 transition-colors text-sm"
               >
                 Вернуться в профиль
