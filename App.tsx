@@ -45,6 +45,16 @@ const routeToPath = (route: RouteState): string => {
   return '/';
 };
 
+const OrbitLoader: React.FC<{ label?: string }> = ({ label }) => (
+  <div className="flex flex-col items-center gap-4" role="status" aria-live="polite">
+    <div className="orbit-container">
+      <div className="orbit-inner" />
+      <div className="orbit-outer" />
+    </div>
+    {label ? <div className="text-slate-300 text-sm">{label}</div> : null}
+  </div>
+);
+
 const App: React.FC = () => {
   const initialRoute = useMemo(() => normalizeRoute(parseRouteFromLocation()), []);
   const [locationPath, setLocationPath] = useState(() => window.location.pathname);
@@ -295,7 +305,7 @@ const App: React.FC = () => {
   if (bootstrapping && currentView === 'profile') {
     return (
       <div className="min-h-screen bg-void text-white flex items-center justify-center">
-        <div className="text-slate-300 text-sm">Загрузка…</div>
+        <OrbitLoader label="Загрузка" />
       </div>
     );
   }
@@ -335,7 +345,7 @@ const App: React.FC = () => {
       {currentView === 'course' && user && (
         isLessonsLoading ? (
           <div className="min-h-screen bg-void text-white flex items-center justify-center">
-            <div className="text-slate-300 text-sm">Загружаем уроки…</div>
+            <OrbitLoader label="Загружаем уроки" />
           </div>
         ) : activeCourse && activeCourse.lessons.length > 0 ? (
           <CourseViewer 

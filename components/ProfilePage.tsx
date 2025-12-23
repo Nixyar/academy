@@ -17,6 +17,9 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, courses, onLogou
   const totalCalls = user.dailyLimit ?? 15;
   const usedCalls = user.dailyUsed ?? 0;
   const remainingCalls = Math.max(0, totalCalls - usedCalls);
+  const [avatarError, setAvatarError] = React.useState(false);
+  const showAvatarImage = Boolean(user.avatarUrl && !avatarError);
+  const userInitial = (user.name?.charAt(0) || '?').toUpperCase();
 
   return (
     <div className="min-h-screen bg-void text-white font-sans">
@@ -40,10 +43,17 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, courses, onLogou
             {/* Avatar Card */}
             <div className="w-full md:w-auto flex-shrink-0">
                 <div className="w-32 h-32 rounded-3xl bg-gradient-to-br from-[#1e293b] to-[#0f172a] border border-white/10 p-1 relative group shadow-2xl">
-                    <div className="w-full h-full rounded-[1.3rem] overflow-hidden relative">
-                         <div className="absolute inset-0 bg-gradient-to-br from-vibe-500/20 to-purple-500/20"></div>
-                         <div className="absolute inset-0 flex items-center justify-center">
-                            <span className="text-4xl font-bold text-slate-300 font-display">{user.name.charAt(0).toUpperCase()}</span>
+                    <div className="w-full h-full rounded-[1.3rem] overflow-hidden relative bg-gradient-to-br from-vibe-500/20 to-purple-500/20">
+                         {showAvatarImage && (
+                           <img
+                             src={user.avatarUrl ?? undefined}
+                             alt={`${user.name} avatar`}
+                             className="w-full h-full object-cover"
+                             onError={() => setAvatarError(true)}
+                           />
+                         )}
+                         <div className={`absolute inset-0 flex items-center justify-center transition-opacity duration-200 ${showAvatarImage ? 'opacity-0' : 'opacity-100'}`}>
+                            <span className="text-4xl font-bold text-slate-300 font-display">{userInitial}</span>
                          </div>
                     </div>
                     {user.isSubscribed && (
@@ -59,8 +69,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, courses, onLogou
                 <h1 className="text-4xl md:text-5xl font-bold font-display mb-2 text-transparent bg-clip-text bg-gradient-to-r from-white to-slate-400">
                     Привет, {user.name}! 👋
                 </h1>
-                <p className="text-slate-400 mb-6 text-lg">Готов продолжить писать код силой мысли?</p>
-                
+
                 <div className="flex flex-wrap gap-4">
                     <div className="bg-[#0b1120] border border-white/10 rounded-2xl px-4 py-3 flex items-center gap-3 shadow-lg shadow-black/30 min-w-[240px]">
                         <div className="p-2.5 bg-vibe-500/15 rounded-2xl text-vibe-300 border border-vibe-500/20">
