@@ -18,6 +18,7 @@ interface BackendLesson {
   slug: string | null;
   title: string | null;
   lesson_type: string | null;
+  lesson_type_ru?: string | null;
   sort_order?: number | null;
   blocks?: unknown;
 }
@@ -86,6 +87,8 @@ function mapLesson(row: BackendLesson): Lesson {
     title: row.title ?? 'Без названия',
     description: extractDescription(row.blocks),
     type: mapLessonType(row.lesson_type),
+    lessonType: row.lesson_type ?? null,
+    lessonTypeRu: row.lesson_type_ru ?? null,
     sortOrder: row.sort_order ?? null,
     blocks: row.blocks,
     videoUrl: null,
