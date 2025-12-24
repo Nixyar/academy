@@ -1,8 +1,8 @@
-import React, { useState } from 'react';
-import { Course, Lesson, LessonType } from '../types';
+import React, { useMemo, useState } from 'react';
+import { Course, LessonType } from '../types';
 import { ImageAnalyzer } from './ImageAnalyzer';
 import { ImageEditor } from './ImageEditor';
-import { Play, FileText, CheckCircle, Lock, Menu, X, ChevronLeft, ChevronRight } from 'lucide-react';
+import { FileText, Menu, X, ChevronLeft, ChevronRight } from 'lucide-react';
 
 interface CourseViewerProps {
   course: Course;
@@ -14,24 +14,129 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({ course, onBack, isSu
   const [activeLessonIndex, setActiveLessonIndex] = useState(0);
   const activeLesson = course.lessons[activeLessonIndex];
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [quizAnswer, setQuizAnswer] = useState<number | null>(null);
+  const [copiedExample, setCopiedExample] = useState<number | null>(null);
 
-  // Mock function to render video placeholder
-  const renderVideo = (url?: string) => (
-    <div className="aspect-video bg-black rounded-xl mb-6 flex items-center justify-center relative overflow-hidden group border border-white/10 shadow-2xl">
-      {url ? (
-          <div className="w-full h-full bg-gradient-to-br from-slate-900 to-void flex flex-col items-center justify-center text-slate-400">
-               <div className="w-20 h-20 rounded-full bg-vibe-600/20 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
-                    <Play className="w-8 h-8 fill-vibe-500 text-vibe-500" />
-               </div>
-               <span className="font-display font-bold text-lg">Видео: {activeLesson.title}</span>
-          </div>
-      ) : (
-          <div className="w-full h-full bg-slate-900 flex items-center justify-center text-slate-500">
-            Видео недоступно
-          </div>
-      )}
-    </div>
-  );
+  const heroSubtitle = useMemo(() => {
+    const { blocks } = activeLesson;
+    if (!blocks) return null;
+    if (Array.isArray(blocks)) {
+      const hero = blocks.find(
+        (block) => block && typeof block === 'object' && (block as any).type === 'hero',
+      );
+      if (hero && typeof (hero as any).subtitle === 'string') {
+        return (hero as any).subtitle as string;
+      }
+    }
+    if (blocks && typeof blocks === 'object' && (blocks as any).type === 'hero') {
+      const subtitle = (blocks as any).subtitle;
+      if (typeof subtitle === 'string') return subtitle;
+    }
+    return null;
+  }, [activeLesson]);
+
+  const quizBlock = useMemo(() => {
+    const { blocks } = activeLesson;
+    const extract = (block: unknown) => {
+      if (block && typeof block === 'object' && (block as any).type === 'quiz') {
+        const title = typeof (block as any).title === 'string' ? (block as any).title : null;
+        const question = typeof (block as any).question === 'string' ? (block as any).question : null;
+        const note = typeof (block as any).note === 'string' ? (block as any).note : null;
+        const options = Array.isArray((block as any).options)
+          ? ((block as any).options as unknown[]).filter((opt) => typeof opt === 'string') as string[]
+          : null;
+        return { title, question, note, options };
+      }
+      return null;
+    };
+
+    if (Array.isArray(blocks)) {
+      for (const block of blocks) {
+        const value = extract(block);
+        if (value) return value;
+      }
+    } else {
+      const value = extract(blocks);
+      if (value) return value;
+    }
+    return null;
+  }, [activeLesson]);
+
+  const examplesBlock = useMemo(() => {
+    const { blocks } = activeLesson;
+    const extract = (block: unknown) => {
+      if (block && typeof block === 'object' && (block as any).type === 'examples') {
+        const title = typeof (block as any).title === 'string' ? (block as any).title : null;
+        const tip = typeof (block as any).tip === 'string' ? (block as any).tip : null;
+        const itemsRaw = (block as any).items;
+        const items = Array.isArray(itemsRaw)
+          ? itemsRaw
+              .map((item) => {
+                if (!item || typeof item !== 'object') return null;
+                const label = typeof (item as any).label === 'string' ? (item as any).label : null;
+                const content = typeof (item as any).content === 'string' ? (item as any).content : null;
+                const notes = Array.isArray((item as any).notes)
+                  ? ((item as any).notes as unknown[])
+                      .filter((note) => typeof note === 'string')
+                      .map((note) => note as string)
+                  : null;
+                if (!label && !content) return null;
+                return { label, content, notes };
+              })
+              .filter(Boolean) as { label: string | null; content: string | null; notes: string[] | null }[]
+          : null;
+        return { title, tip, items };
+      }
+      return null;
+    };
+
+    if (Array.isArray(blocks)) {
+      for (const block of blocks) {
+        const value = extract(block);
+        if (value) return value;
+      }
+    } else {
+      const value = extract(blocks);
+      if (value) return value;
+    }
+    return null;
+  }, [activeLesson]);
+
+  const handleCopyExample = async (text: string | null, idx: number) => {
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedExample(idx);
+      setTimeout(() => setCopiedExample((current) => (current === idx ? null : current)), 1500);
+    } catch {
+      // ignore clipboard errors
+    }
+  };
+
+  const ctaData = useMemo(() => {
+    const { blocks } = activeLesson;
+    const extract = (block: unknown) => {
+      if (block && typeof block === 'object' && (block as any).type === 'cta') {
+        const buttonText = typeof (block as any).buttonText === 'string' ? (block as any).buttonText : null;
+        const action = typeof (block as any).action === 'string' ? (block as any).action : null;
+        if (buttonText || action) {
+          return { buttonText, action };
+        }
+      }
+      return null;
+    };
+
+    if (Array.isArray(blocks)) {
+      for (const block of blocks) {
+        const value = extract(block);
+        if (value) return value;
+      }
+    } else {
+      const value = extract(blocks);
+      if (value) return value;
+    }
+    return { buttonText: null, action: null };
+  }, [activeLesson]);
 
   // Render the Right Side Content based on Lesson Type
   const renderRightPanel = () => {
@@ -83,7 +188,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({ course, onBack, isSu
             </div>
             <div className="flex items-center gap-4">
                 <span className="text-xs text-vibe-400 font-mono px-3 py-1 bg-vibe-500/10 border border-vibe-500/20 rounded-full">
-                    Lesson {activeLessonIndex + 1} / {course.lessons.length}
+                    Урок {activeLessonIndex + 1} / {course.lessons.length}
                 </span>
                 <button 
                     className="md:hidden text-slate-300"
@@ -100,13 +205,11 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({ course, onBack, isSu
                 absolute md:relative z-20 w-72 bg-[#02050e] border-r border-white/5 h-full transition-transform duration-300 flex flex-col
                 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
             `}>
-                <div className="p-5 border-b border-white/5">
-                    <h2 className="font-bold font-display text-slate-300 uppercase text-xs tracking-widest">Syllabus</h2>
-                </div>
                 <div className="overflow-y-auto h-full pb-20 custom-scrollbar">
                     {course.lessons.map((lesson, idx) => (
                         <button
                             key={lesson.id}
+                            disabled
                             onClick={() => {
                                 setActiveLessonIndex(idx);
                                 setSidebarOpen(false);
@@ -125,7 +228,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({ course, onBack, isSu
                                     {lesson.title}
                                 </h4>
                                 <span className="text-[10px] text-slate-600 uppercase tracking-wider font-bold">
-                                    {lesson.type === LessonType.VIDEO_TEXT ? 'Lecture' : 'Workshop'}
+                                    {lesson.lessonTypeRu ?? lesson.lessonType ?? lesson.type ?? ''}
                                 </span>
                             </div>
                         </button>
@@ -140,17 +243,139 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({ course, onBack, isSu
                 <div className="w-full md:w-1/2 overflow-y-auto p-6 md:p-10 custom-scrollbar bg-void">
                     <div className="max-w-3xl mx-auto">
                         <div className="mb-8">
-                             <span className="text-vibe-400 text-xs font-bold uppercase tracking-widest mb-2 block">Current Module</span>
+                             <span className="text-vibe-400 text-xs font-bold uppercase tracking-widest mb-2 block">
+                               {activeLesson.lessonTypeRu ?? activeLesson.lessonType ?? activeLesson.type ?? 'Lesson'}
+                             </span>
                              <h2 className="text-3xl md:text-4xl font-bold text-white font-display">{activeLesson.title}</h2>
+                             {heroSubtitle && (
+                               <p className="text-slate-300 text-base md:text-lg leading-relaxed mt-3">
+                                 {heroSubtitle}
+                               </p>
+                             )}
                         </div>
-                        
-                        {renderVideo(activeLesson.videoUrl)}
 
                         <div className="prose prose-invert prose-lg prose-headings:font-display prose-p:text-slate-400 prose-strong:text-white max-w-none">
                             <p className="whitespace-pre-line leading-relaxed">
                                 {activeLesson.description}
                             </p>
                         </div>
+
+                        {examplesBlock && (
+                          <div className="mt-8 p-6 rounded-2xl border border-white/10 bg-white/5 shadow-lg shadow-black/20 space-y-4">
+                            <div className="flex items-start gap-3">
+                              <div className="w-10 h-10 rounded-full bg-purple-500/15 text-purple-200 font-bold flex items-center justify-center border border-purple-500/20 text-lg">
+                                ✦
+                              </div>
+                              <div className="space-y-1">
+                                <p className="text-xs uppercase tracking-wider text-purple-200 font-semibold">Examples</p>
+                                <p className="text-2xl font-display font-semibold text-white leading-tight">
+                                  {examplesBlock.title ?? 'Примеры'}
+                                </p>
+                                {examplesBlock.tip && (
+                                  <p className="text-sm text-slate-300 whitespace-pre-line leading-relaxed max-w-3xl">
+                                    {examplesBlock.tip}
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+
+                            {examplesBlock.items && examplesBlock.items.length > 0 && (
+                              <div className="space-y-3">
+                                {examplesBlock.items.map((item, idx) => {
+                                  const label = (item.label ?? '').toLowerCase();
+                                  const isBad = label.includes('плох');
+                                  const accentClasses = isBad
+                                    ? 'bg-[#0b1020] border-slate-700/40 text-slate-200'
+                                    : 'bg-[#0c1a22] border-teal-500/25 text-teal-100';
+                                  const badgeClasses = isBad
+                                    ? 'bg-slate-700/40 text-slate-200 border border-slate-500/40'
+                                    : 'bg-teal-500/20 text-teal-100 border border-teal-400/30';
+                                  const noteColor = isBad ? 'text-slate-400' : 'text-teal-100/80';
+
+                                  return (
+                                    <div
+                                      key={idx}
+                                      className={`p-4 rounded-xl border ${accentClasses} space-y-2`}
+                                    >
+                                      <div className="flex items-center gap-2">
+                                        {item.label && (
+                                          <span className={`text-xs font-semibold uppercase tracking-wide px-2 py-1 rounded-full ${badgeClasses}`}>
+                                            {item.label}
+                                          </span>
+                                        )}
+                                      </div>
+                                      {item.content && (
+                                        <div className="rounded-lg bg-white/5 px-3 py-2 border border-white/5 relative">
+                                          <button
+                                            type="button"
+                                            onClick={() => handleCopyExample(item.content, idx)}
+                                            className="absolute top-2 right-2 text-[11px] uppercase tracking-wide px-2 py-1 rounded-md border border-white/10 text-slate-300 hover:border-vibe-400/40 hover:text-white transition-colors"
+                                            style={{ cursor: item.content ? 'pointer' : 'default' }}
+                                          >
+                                            {copiedExample === idx ? 'Скопировано' : 'Копировать'}
+                                          </button>
+                                          <p className="text-sm text-white whitespace-pre-line leading-relaxed max-w-3xl pr-16">
+                                            {item.content}
+                                          </p>
+                                        </div>
+                                      )}
+                                      {item.notes && item.notes.length > 0 && (
+                                        <ul className="space-y-1.5 text-sm leading-snug list-disc list-inside">
+                                          {item.notes.map((note, noteIdx) => (
+                                            <li key={noteIdx} className={noteColor}>
+                                              {note}
+                                            </li>
+                                          ))}
+                                        </ul>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {quizBlock && (
+                          <div className="mt-8 p-6 rounded-2xl border border-white/10 bg-white/5 shadow-lg shadow-black/20">
+                            <div className="flex items-start gap-3 mb-3">
+                              <div className="w-10 h-10 rounded-full bg-vibe-500/15 text-vibe-300 font-bold flex items-center justify-center border border-vibe-500/20">
+                                ?
+                              </div>
+                              <div>
+                                <p className="text-xs uppercase tracking-wider text-vibe-300 font-bold mb-1">Quiz</p>
+                                <p className="text-xl font-display text-white leading-tight">
+                                  {quizBlock.title ?? 'Мини-эксперимент'}
+                                </p>
+                              </div>
+                            </div>
+                            {quizBlock.question && (
+                              <p className="text-slate-300 whitespace-pre-line leading-relaxed">{quizBlock.question}</p>
+                            )}
+                            {quizBlock.options && quizBlock.options.length > 0 && (
+                              <div className="mt-4 space-y-2">
+                                {quizBlock.options.map((option, idx) => (
+                                  <button
+                                    key={idx}
+                                    type="button"
+                                    onClick={() => setQuizAnswer(idx)}
+                                    className={`w-full text-left px-4 py-3 rounded-xl border transition-colors ${
+                                      quizAnswer === idx
+                                        ? 'bg-green-500/10 border-green-400/40 text-green-100'
+                                        : 'bg-[#070c18] border-white/5 text-slate-200 hover:border-vibe-500/30 hover:bg-white/5'
+                                    }`}
+                                    style={{ cursor: 'pointer' }}
+                                  >
+                                    <span className="text-sm">{option}</span>
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                            {quizBlock.note && (
+                              <div className="mt-4 text-xs text-slate-400 italic">Note: {quizBlock.note}</div>
+                            )}
+                          </div>
+                        )}
                         
                         <div className="mt-12 flex justify-between items-center pt-8 border-t border-white/10">
                             <button 
@@ -164,8 +389,9 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({ course, onBack, isSu
                                 disabled={activeLessonIndex === course.lessons.length - 1}
                                 onClick={() => setActiveLessonIndex(prev => prev + 1)}
                                 className="px-6 py-2.5 rounded-xl bg-vibe-600 text-white font-bold hover:bg-vibe-500 transition-colors shadow-lg shadow-vibe-900/20 disabled:opacity-50 text-sm flex items-center gap-2"
+                                data-action={ctaData.action ?? undefined}
                             >
-                                Следующий <ChevronRight className="w-4 h-4" />
+                                {ctaData.buttonText ?? 'Следующий'} <ChevronRight className="w-4 h-4" />
                             </button>
                         </div>
                     </div>
