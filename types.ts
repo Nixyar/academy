@@ -26,6 +26,8 @@ export interface Lesson {
   description: string; // Markdown supported
   videoUrl?: string | null;
   type: LessonType;
+  lessonType?: string | null; // raw backend lesson_type (en)
+  lessonTypeRu?: string | null; // localized lesson_type_ru for display
   sortOrder?: number | null;
   blocks?: unknown;
   initialCode?: string; // For code gen lessons
