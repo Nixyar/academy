@@ -162,10 +162,6 @@ const App: React.FC = () => {
         const profile = await me();
         setUser(userFromProfile(profile));
         setHasFetchedProfile(true);
-        const latestRoute = normalizeRoute(parseRouteFromLocation());
-        if (latestRoute.view === 'landing') {
-          navigateToProfile();
-        }
       } catch {
         setUser(null);
         setHasFetchedProfile(true);
@@ -216,7 +212,6 @@ const App: React.FC = () => {
   const handleAuthenticated = (authedUser: User) => {
     setUser(authedUser);
     setHasFetchedProfile(true);
-    navigateToProfile();
     setAuthModalOpen(false);
   };
 
@@ -296,7 +291,7 @@ const App: React.FC = () => {
       <AuthCallback
         onAuthenticated={(authedUser) => {
           setUser(authedUser);
-          navigateToProfile();
+          setHasFetchedProfile(true);
         }}
       />
     );
