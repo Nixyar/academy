@@ -11,6 +11,21 @@ export interface Course {
   lessons: Lesson[];
 }
 
+export type LessonStatus = 'in_progress' | 'completed';
+
+export interface LessonProgress {
+  status?: LessonStatus;
+  completed_at?: string | null;
+  quiz_answers?: Record<string, unknown>;
+}
+
+export interface CourseProgress {
+  lessons?: Record<string, LessonProgress | undefined>;
+  resume_lesson_id?: string | null;
+  last_viewed_lesson_id?: string | null;
+  [key: string]: unknown;
+}
+
 export enum LessonType {
   VIDEO_TEXT = 'VIDEO_TEXT',
   INTERACTIVE_ANALYSIS = 'INTERACTIVE_ANALYSIS', // Image understanding
@@ -42,7 +57,7 @@ export interface User {
   plan?: string;
   dailyLimit?: number;
   dailyUsed?: number;
-  progress: Record<string, number>; // courseId -> lessonIndex
+  progress: Record<string, CourseProgress>; // courseId -> progress object
   completedCourses: string[];
 }
 

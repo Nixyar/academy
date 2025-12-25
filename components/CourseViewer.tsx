@@ -1,21 +1,96 @@
-import React, { useMemo, useState } from 'react';
-import { Course, LessonType } from '../types';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Course, CourseProgress, LessonType } from '../types';
 import { ImageAnalyzer } from './ImageAnalyzer';
 import { ImageEditor } from './ImageEditor';
 import { FileText, Menu, X, ChevronLeft, ChevronRight } from 'lucide-react';
+import { fetchCourseProgress, fetchCourseResume, patchCourseProgress } from '../services/progressApi';
 
 interface CourseViewerProps {
   course: Course;
   onBack: () => void;
   isSubscribed: boolean;
+  initialProgress?: CourseProgress;
+  onProgressChange?: (courseId: string, progress: CourseProgress) => void;
 }
 
-export const CourseViewer: React.FC<CourseViewerProps> = ({ course, onBack, isSubscribed }) => {
+export const CourseViewer: React.FC<CourseViewerProps> = ({
+  course,
+  onBack,
+  isSubscribed,
+  initialProgress,
+  onProgressChange,
+}) => {
   const [activeLessonIndex, setActiveLessonIndex] = useState(0);
   const activeLesson = course.lessons[activeLessonIndex];
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [quizAnswer, setQuizAnswer] = useState<number | null>(null);
   const [copiedExample, setCopiedExample] = useState<number | null>(null);
+  const [courseProgress, setCourseProgress] = useState<CourseProgress>(initialProgress ?? {});
+  const [progressLoading, setProgressLoading] = useState(false);
+
+  const syncProgress = useCallback(
+    (next: CourseProgress) => {
+      setCourseProgress(next);
+      onProgressChange?.(course.id, next);
+    },
+    [course.id, onProgressChange],
+  );
+
+  useEffect(() => {
+    setCourseProgress(initialProgress ?? {});
+  }, [initialProgress, course.id]);
+
+  const applyProgressPatch = useCallback(
+    async (patch: Parameters<typeof patchCourseProgress>[1]) => {
+      try {
+        const updated = await patchCourseProgress(course.id, patch);
+        syncProgress(updated ?? {});
+      } catch (error) {
+        console.error('Failed to update progress', error);
+      }
+    },
+    [course.id, syncProgress],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    setProgressLoading(true);
+    (async () => {
+      try {
+        const [progressData, resumeData] = await Promise.all([
+          fetchCourseProgress(course.id),
+          fetchCourseResume(course.id),
+        ]);
+
+        if (cancelled) return;
+        syncProgress(progressData ?? {});
+
+        const resumeLessonId = resumeData?.lesson_id;
+        const resumeIndex = resumeLessonId
+          ? course.lessons.findIndex((lesson) => lesson.id === resumeLessonId)
+          : -1;
+        const nextLessonIndex = resumeIndex >= 0 ? resumeIndex : 0;
+
+        setActiveLessonIndex(nextLessonIndex);
+
+        const nextLesson = course.lessons[nextLessonIndex];
+        if (nextLesson) {
+          await applyProgressPatch({
+            op: 'set_resume',
+            lessonId: nextLesson.id,
+          });
+        }
+      } catch (error) {
+        console.error('Failed to load course progress', error);
+      } finally {
+        if (!cancelled) setProgressLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [applyProgressPatch, course.id, course.lessons, syncProgress]);
 
   const heroSubtitle = useMemo(() => {
     const { blocks } = activeLesson;
@@ -39,13 +114,21 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({ course, onBack, isSu
     const { blocks } = activeLesson;
     const extract = (block: unknown) => {
       if (block && typeof block === 'object' && (block as any).type === 'quiz') {
+        const quizId =
+          typeof (block as any).id === 'string'
+            ? (block as any).id
+            : typeof (block as any).quizId === 'string'
+              ? (block as any).quizId
+              : typeof (block as any).quiz_id === 'string'
+                ? (block as any).quiz_id
+                : null;
         const title = typeof (block as any).title === 'string' ? (block as any).title : null;
         const question = typeof (block as any).question === 'string' ? (block as any).question : null;
         const note = typeof (block as any).note === 'string' ? (block as any).note : null;
         const options = Array.isArray((block as any).options)
           ? ((block as any).options as unknown[]).filter((opt) => typeof opt === 'string') as string[]
           : null;
-        return { title, question, note, options };
+        return { id: quizId ?? 'default', title, question, note, options };
       }
       return null;
     };
@@ -61,6 +144,33 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({ course, onBack, isSu
     }
     return null;
   }, [activeLesson]);
+
+  useEffect(() => {
+    if (!quizBlock?.options) {
+      setQuizAnswer(null);
+      return;
+    }
+
+    const lessonProgress = courseProgress?.lessons?.[activeLesson.id];
+    const saved = lessonProgress?.quiz_answers?.[quizBlock.id ?? 'default'];
+    if (saved === undefined || saved === null) {
+      setQuizAnswer(null);
+      return;
+    }
+
+    const matchedByValue = quizBlock.options.findIndex((option) => option === saved);
+    if (matchedByValue >= 0) {
+      setQuizAnswer(matchedByValue);
+      return;
+    }
+
+    if (typeof saved === 'number' && quizBlock.options[saved]) {
+      setQuizAnswer(saved);
+      return;
+    }
+
+    setQuizAnswer(null);
+  }, [activeLesson.id, courseProgress, quizBlock]);
 
   const examplesBlock = useMemo(() => {
     const { blocks } = activeLesson;
@@ -112,6 +222,49 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({ course, onBack, isSu
       // ignore clipboard errors
     }
   };
+
+  const handleQuizSelect = useCallback(
+    async (optionIndex: number, optionValue: string | null) => {
+      setQuizAnswer(optionIndex);
+      await applyProgressPatch({
+        op: 'quiz_answer',
+        lessonId: activeLesson.id,
+        quizId: quizBlock?.id ?? 'default',
+        answer: optionValue ?? optionIndex,
+      });
+    },
+    [activeLesson.id, applyProgressPatch, quizBlock?.id],
+  );
+
+  const goToLesson = useCallback(
+    (targetIndex: number, options?: { completeCurrent?: boolean }) => {
+      if (targetIndex < 0 || targetIndex >= course.lessons.length) return;
+      if (targetIndex === activeLessonIndex) return;
+
+      const targetLesson = course.lessons[targetIndex];
+      const currentLesson = course.lessons[activeLessonIndex];
+
+      setActiveLessonIndex(targetIndex);
+      setSidebarOpen(false);
+
+      void (async () => {
+        if (options?.completeCurrent && currentLesson) {
+          await applyProgressPatch({
+            op: 'lesson_status',
+            lessonId: currentLesson.id,
+            status: 'completed',
+            completedAt: new Date().toISOString(),
+          });
+        }
+
+        await applyProgressPatch({
+          op: 'set_resume',
+          lessonId: targetLesson.id,
+        });
+      })();
+    },
+    [activeLessonIndex, applyProgressPatch, course.lessons],
+  );
 
   const ctaData = useMemo(() => {
     const { blocks } = activeLesson;
@@ -209,11 +362,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({ course, onBack, isSu
                     {course.lessons.map((lesson, idx) => (
                         <button
                             key={lesson.id}
-                            disabled
-                            onClick={() => {
-                                setActiveLessonIndex(idx);
-                                setSidebarOpen(false);
-                            }}
+                            onClick={() => goToLesson(idx)}
                             className={`w-full text-left p-4 border-b border-white/5 hover:bg-white/5 transition-all flex items-start gap-3 group
                                 ${activeLessonIndex === idx ? 'bg-white/5 border-l-2 border-l-vibe-500' : 'border-l-2 border-l-transparent'}
                             `}
@@ -358,7 +507,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({ course, onBack, isSu
                                   <button
                                     key={idx}
                                     type="button"
-                                    onClick={() => setQuizAnswer(idx)}
+                                    onClick={() => handleQuizSelect(idx, option)}
                                     className={`w-full text-left px-4 py-3 rounded-xl border transition-colors ${
                                       quizAnswer === idx
                                         ? 'bg-green-500/10 border-green-400/40 text-green-100'
@@ -380,14 +529,14 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({ course, onBack, isSu
                         <div className="mt-12 flex justify-between items-center pt-8 border-t border-white/10">
                             <button 
                                 disabled={activeLessonIndex === 0}
-                                onClick={() => setActiveLessonIndex(prev => prev - 1)}
+                                onClick={() => goToLesson(activeLessonIndex - 1)}
                                 className="px-5 py-2.5 rounded-xl border border-white/10 text-slate-400 disabled:opacity-30 hover:bg-white/5 transition-colors font-bold text-sm"
                             >
                                 Предыдущий
                             </button>
                             <button 
                                 disabled={activeLessonIndex === course.lessons.length - 1}
-                                onClick={() => setActiveLessonIndex(prev => prev + 1)}
+                                onClick={() => goToLesson(activeLessonIndex + 1, { completeCurrent: true })}
                                 className="px-6 py-2.5 rounded-xl bg-vibe-600 text-white font-bold hover:bg-vibe-500 transition-colors shadow-lg shadow-vibe-900/20 disabled:opacity-50 text-sm flex items-center gap-2"
                                 data-action={ctaData.action ?? undefined}
                             >
