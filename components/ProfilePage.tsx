@@ -12,8 +12,25 @@ interface ProfilePageProps {
 
 export const ProfilePage: React.FC<ProfilePageProps> = ({ user, courses, onLogout, onContinueCourse, onSubscribe }) => {
   
+  const getCourseProgressState = (courseId: string) => {
+    const progress = user.progress?.[courseId];
+    const lessons = progress?.lessons ?? {};
+    const completedLessons = Object.values(lessons).filter(
+      (lesson) => lesson?.status === 'completed',
+    ).length;
+    const started =
+      Object.keys(lessons).length > 0 ||
+      Boolean(progress?.resume_lesson_id) ||
+      Boolean(progress?.last_viewed_lesson_id);
+
+    return { completedLessons, started };
+  };
+
   // Calculate mock stats
-  const coursesInProgress = Object.keys(user.progress).length;
+  const coursesInProgress = courses.reduce((count, course) => {
+    const { started } = getCourseProgressState(course.id);
+    return started ? count + 1 : count;
+  }, 0);
   const totalCalls = user.dailyLimit ?? 15;
   const usedCalls = user.dailyUsed ?? 0;
   const remainingCalls = Math.max(0, totalCalls - usedCalls);
@@ -129,10 +146,9 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, courses, onLogou
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-12">
             {courses.map(course => {
-                const progress = user.progress[course.id] || 0; // index of last lesson
+                const { completedLessons, started: isStarted } = getCourseProgressState(course.id);
                 const totalLessons = course.lessons.length;
-                const percent = totalLessons > 0 ? Math.round(((progress) / totalLessons) * 100) : 0;
-                const isStarted = user.progress[course.id] !== undefined;
+                const percent = totalLessons > 0 ? Math.round((completedLessons / totalLessons) * 100) : 0;
 
                 return (
                     <div key={course.id} className="group bg-glass border border-white/5 rounded-2xl overflow-hidden hover:border-vibe-500/30 transition-all hover:-translate-y-1 hover:shadow-2xl hover:shadow-vibe-900/10">

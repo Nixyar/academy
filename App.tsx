@@ -1,14 +1,15 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { LandingPage } from './components/LandingPage';
 import { CourseViewer } from './components/CourseViewer';
 import { AuthModal } from './components/AuthModal';
 import { ProfilePage } from './components/ProfilePage';
 import { AuthCallback } from './components/AuthCallback';
-import { Course, User } from './types';
+import { Course, CourseProgress, User } from './types';
 import { logout, me } from './services/authApi';
 import { clearSupabaseStoredSession, supabase } from './services/supabaseClient';
 import { userFromProfile } from './services/userFromProfile';
 import { fetchCourseLessons, fetchCourses } from './services/coursesApi';
+import { fetchCoursesProgress } from './services/progressApi';
 
 type View = 'landing' | 'course' | 'profile';
 
@@ -77,6 +78,7 @@ const App: React.FC = () => {
   const [lessonsLoadingFor, setLessonsLoadingFor] = useState<string | null>(null);
   const coursesLoadedRef = useRef(false);
   const bootstrapPromiseRef = useRef<Promise<void> | null>(null);
+  const progressFetchKeyRef = useRef<string | null>(null);
 
   const syncRoute = (next: RouteState) => {
     const normalized = normalizeRoute(next);
@@ -103,6 +105,10 @@ const App: React.FC = () => {
     setAuthMode(mode);
     setAuthModalOpen(true);
   };
+
+  useEffect(() => {
+    progressFetchKeyRef.current = null;
+  }, [user?.id]);
 
   useEffect(() => {
     if (coursesLoadedRef.current) return;
@@ -176,6 +182,39 @@ const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    if (!user || !hasFetchedProfile) return;
+    if (courses.length === 0) return;
+
+    const sortedIds = [...courses].map((course) => course.id).sort();
+    if (!sortedIds.length) return;
+    const key = `${user.id}:${sortedIds.join(',')}`;
+    if (progressFetchKeyRef.current === key) return;
+    progressFetchKeyRef.current = key;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const progressMap = await fetchCoursesProgress(sortedIds);
+        if (cancelled) return;
+        setUser((prev) =>
+          prev
+            ? {
+                ...prev,
+                progress: { ...(prev.progress ?? {}), ...progressMap },
+              }
+            : prev,
+        );
+      } catch (error) {
+        console.error('Failed to load user progress', error);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [courses, hasFetchedProfile, user?.id]);
+
+  useEffect(() => {
     if (bootstrapping) return;
 
     if (route.view === 'profile') {
@@ -229,6 +268,20 @@ const App: React.FC = () => {
     setHasFetchedProfile(true);
     navigateToLanding();
   };
+
+  const handleCourseProgressChange = useCallback(
+    (courseId: string, progress: CourseProgress) => {
+      setUser((prev) =>
+        prev
+          ? {
+              ...prev,
+              progress: { ...(prev.progress ?? {}), [courseId]: progress },
+            }
+          : prev,
+      );
+    },
+    [],
+  );
 
   const handleSelectCourse = async (
     courseId: string,
@@ -347,6 +400,8 @@ const App: React.FC = () => {
             course={activeCourse} 
             onBack={navigateToProfile}
             isSubscribed={user.isSubscribed}
+            initialProgress={user.progress?.[activeCourse.id]}
+            onProgressChange={handleCourseProgressChange}
           />
         ) : (
           <div className="min-h-screen bg-void text-white flex items-center justify-center text-center px-6">
