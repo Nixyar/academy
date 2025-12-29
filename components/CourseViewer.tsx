@@ -1,9 +1,25 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Course, CourseProgress, LessonType } from '../types';
 import { ImageAnalyzer } from './ImageAnalyzer';
 import { ImageEditor } from './ImageEditor';
-import { FileText, Menu, X, ChevronLeft, ChevronRight } from 'lucide-react';
+import { FileText, Menu, X, ChevronLeft, ChevronRight, Send } from 'lucide-react';
 import { fetchCourseProgress, fetchCourseResume, patchCourseProgress } from '../services/progressApi';
+import { apiFetch } from '../services/apiClient';
+
+const IFRAME_BASE_STYLES = `
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 0;
+    background: #050914;
+    color: #e5e7eb;
+    font-family: 'Inter', 'SF Pro Text', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    line-height: 1.6;
+  }
+  a { color: #7dd3fc; }
+  img { max-width: 100%; display: block; }
+`;
 
 interface CourseViewerProps {
   course: Course;
@@ -20,6 +36,8 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
   initialProgress,
   onProgressChange,
 }) => {
+  const apiBaseUrl =
+    (import.meta as any).env?.DEV === true ? '' : (import.meta as any).env?.VITE_API_BASE_URL ?? '';
   const [activeLessonIndex, setActiveLessonIndex] = useState(0);
   const activeLesson = course.lessons[activeLessonIndex];
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -27,6 +45,19 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
   const [copiedExample, setCopiedExample] = useState<number | null>(null);
   const [courseProgress, setCourseProgress] = useState<CourseProgress>(initialProgress ?? {});
   const [progressLoading, setProgressLoading] = useState(false);
+  const [promptInput, setPromptInput] = useState('');
+  const [isSendingPrompt, setIsSendingPrompt] = useState(false);
+  const [llmHtml, setLlmHtml] = useState<string | null>(null);
+  const [llmError, setLlmError] = useState<string | null>(null);
+  const [llmOutline, setLlmOutline] = useState<unknown>(null);
+  const [llmCss, setLlmCss] = useState<string | null>(null);
+  const [llmSections, setLlmSections] = useState<Record<string, string>>({});
+  const [llmSectionOrder, setLlmSectionOrder] = useState<string[]>([]);
+  const llmCssRef = useRef<string | null>(null);
+  const llmSectionsRef = useRef<Record<string, string>>({});
+  const llmSectionOrderRef = useRef<string[]>([]);
+  const llmOutlineRef = useRef<unknown>(null);
+  const streamControllerRef = useRef<AbortController | null>(null);
 
   const syncProgress = useCallback(
     (next: CourseProgress) => {
@@ -110,6 +141,11 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     return null;
   }, [activeLesson]);
 
+  const isWorkshopLesson = useMemo(
+    () => (activeLesson.lessonType ?? '').toLowerCase() === 'workshop',
+    [activeLesson.lessonType],
+  );
+
   const quizBlock = useMemo(() => {
     const { blocks } = activeLesson;
     const extract = (block: unknown) => {
@@ -171,6 +207,51 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
 
     setQuizAnswer(null);
   }, [activeLesson.id, courseProgress, quizBlock]);
+
+  useEffect(() => {
+    setPromptInput('');
+    setIsSendingPrompt(false);
+    setLlmHtml(null);
+    setLlmError(null);
+    setLlmOutline(null);
+    setLlmCss(null);
+    setLlmSections({});
+    setLlmSectionOrder([]);
+    llmCssRef.current = null;
+    llmSectionsRef.current = {};
+    llmSectionOrderRef.current = [];
+    llmOutlineRef.current = null;
+    if (streamControllerRef.current) {
+      streamControllerRef.current.abort();
+      streamControllerRef.current = null;
+    }
+  }, [activeLesson.id]);
+
+  useEffect(
+    () => () => {
+      if (streamControllerRef.current) {
+        streamControllerRef.current.abort();
+        streamControllerRef.current = null;
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    llmCssRef.current = llmCss;
+  }, [llmCss]);
+
+  useEffect(() => {
+    llmSectionsRef.current = llmSections;
+  }, [llmSections]);
+
+  useEffect(() => {
+    llmSectionOrderRef.current = llmSectionOrder;
+  }, [llmSectionOrder]);
+
+  useEffect(() => {
+    llmOutlineRef.current = llmOutline;
+  }, [llmOutline]);
 
   const examplesBlock = useMemo(() => {
     const { blocks } = activeLesson;
@@ -266,6 +347,404 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     [activeLessonIndex, applyProgressPatch, course.lessons],
   );
 
+  const parseSseEvent = useCallback((rawEvent: string): { event: string; data: string } => {
+    let eventName = 'message';
+    const dataLines: string[] = [];
+
+    rawEvent.split(/\r?\n/).forEach((line) => {
+      const trimmed = line.trim();
+      if (trimmed.startsWith('event:')) {
+        eventName = trimmed.slice('event:'.length).trim();
+      } else if (trimmed.startsWith('data:')) {
+        dataLines.push(trimmed.slice('data:'.length).trim());
+      }
+    });
+
+    return { event: eventName, data: dataLines.join('\n') };
+  }, []);
+
+  const parseJsonSafe = useCallback((value: string) => {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }, []);
+
+  const extractKeysFromOutline = useCallback((outline: unknown): string[] => {
+    if (!outline) return [];
+    if (Array.isArray(outline)) {
+      return outline
+        .map((item) => {
+          if (typeof item === 'string') return item;
+          if (item && typeof item === 'object') {
+            const candidate = (item as any).key ?? (item as any).id ?? (item as any).name;
+            return typeof candidate === 'string' ? candidate : null;
+          }
+          return null;
+        })
+        .filter((key): key is string => Boolean(key));
+    }
+    if (typeof outline === 'object' && outline !== null && Array.isArray((outline as any).sections)) {
+      return extractKeysFromOutline((outline as any).sections);
+    }
+    return [];
+  }, []);
+
+  const buildHtml = useCallback(
+    (
+      css: string | null,
+      outline: unknown,
+      sections: Record<string, string>,
+      sectionOrder: string[],
+    ): string => {
+      const outlineKeys = extractKeysFromOutline(outline);
+      const orderedKeys =
+        outlineKeys.length > 0
+          ? outlineKeys.filter((key) => sections[key])
+          : sectionOrder.filter((key) => sections[key]);
+      const keysToRender = orderedKeys.length ? orderedKeys : Object.keys(sections);
+
+      const styleTag = css ? `<style>${css}</style>` : '';
+      const body = keysToRender.map((key) => sections[key]).filter(Boolean).join('\n');
+      return [styleTag, body].filter(Boolean).join('\n').trim();
+    },
+    [extractKeysFromOutline],
+  );
+
+  const liveHtmlFromParts = useMemo(
+    () => buildHtml(llmCss ?? null, llmOutline, llmSections, llmSectionOrder),
+    [buildHtml, llmCss, llmOutline, llmSections, llmSectionOrder],
+  );
+
+  const iframeHtml = useMemo(() => {
+    const raw = (llmHtml ?? liveHtmlFromParts ?? '').trim();
+    if (!raw) return null;
+
+    const stylePieces = [IFRAME_BASE_STYLES];
+    if (llmCss && !raw.includes(llmCss)) {
+      stylePieces.push(llmCss);
+    }
+    const styleTag = `<style>${stylePieces.join('\n')}</style>`;
+
+    const ensureHead = (html: string) => {
+      if (/<head[^>]*>/i.test(html)) {
+        return html.replace(/<head[^>]*>/i, (match) => `${match}${styleTag}`);
+      }
+      if (/<html[^>]*>/i.test(html)) {
+        return html.replace(/<html[^>]*>/i, (match) => `${match}<head>${styleTag}</head>`);
+      }
+      return `${styleTag}\n${html}`;
+    };
+
+    const withHead = ensureHead(raw);
+    const hasBodyTag = /<body[^>]*>/i.test(withHead);
+
+    if (hasBodyTag) {
+      return `<!doctype html>\n${withHead}`;
+    }
+
+    return `<!doctype html>
+<html>
+<head>${styleTag}</head>
+<body>
+${withHead}
+</body>
+</html>`;
+  }, [llmCss, llmHtml, liveHtmlFromParts]);
+
+  const cleanupStream = useCallback(() => {
+    if (streamControllerRef.current) {
+      streamControllerRef.current.abort();
+      streamControllerRef.current = null;
+    }
+  }, []);
+
+  const applyFinalPayload = useCallback(
+    (payload: any) => {
+      const payloadSections: Record<string, string> = {};
+      if (payload?.sections && typeof payload.sections === 'object') {
+        Object.entries(payload.sections as Record<string, string | unknown>).forEach(([key, value]) => {
+          if (typeof value === 'string') {
+            const parsedSection = parseJsonSafe(value);
+            if (parsedSection && typeof parsedSection === 'object' && typeof (parsedSection as any).html === 'string') {
+              payloadSections[key] = (parsedSection as any).html as string;
+            } else {
+              payloadSections[key] = value;
+            }
+          }
+        });
+      }
+
+      const mergedSections = { ...llmSectionsRef.current, ...payloadSections };
+      llmSectionsRef.current = mergedSections;
+      setLlmSections(mergedSections);
+
+      const nextCss =
+        typeof payload?.css === 'string' ? payload.css : llmCssRef.current;
+      llmCssRef.current = nextCss ?? null;
+      setLlmCss(nextCss ?? null);
+
+      const nextOutline = payload?.outline ?? llmOutlineRef.current;
+      llmOutlineRef.current = nextOutline ?? null;
+      setLlmOutline(nextOutline ?? null);
+
+      const outlineKeys = extractKeysFromOutline(nextOutline);
+      const mergedOrder =
+        outlineKeys.length > 0
+          ? outlineKeys.filter((key) => mergedSections[key])
+          : (() => {
+              const base = [...llmSectionOrderRef.current];
+              Object.keys(payloadSections).forEach((key) => {
+                if (!base.includes(key)) base.push(key);
+              });
+              return base.filter((key) => mergedSections[key]);
+            })();
+      llmSectionOrderRef.current = mergedOrder;
+      setLlmSectionOrder(mergedOrder);
+
+      const htmlFromPayload = typeof payload?.html === 'string' ? payload.html : null;
+      const finalHtml =
+        htmlFromPayload && htmlFromPayload.trim().length > 0
+          ? htmlFromPayload
+          : buildHtml(nextCss ?? null, nextOutline, mergedSections, mergedOrder);
+
+      if (finalHtml?.trim().length) setLlmHtml(finalHtml);
+
+      const errorMessage =
+        typeof payload?.error === 'string'
+          ? payload.error
+          : typeof payload?.message === 'string'
+            ? payload.message
+            : null;
+      if (errorMessage) setLlmError(errorMessage);
+
+      setIsSendingPrompt(false);
+      cleanupStream();
+    },
+    [buildHtml, cleanupStream, extractKeysFromOutline, parseJsonSafe],
+  );
+
+  const handleStreamEvent = useCallback(
+    (eventName: string, data: string) => {
+      const payload = parseJsonSafe(data);
+      const extractHtml = (value: string) => {
+        try {
+          const parsed = JSON.parse(value);
+          if (parsed && typeof parsed === 'object' && typeof (parsed as any).html === 'string') {
+            return (parsed as any).html as string;
+          }
+        } catch {
+          // not json, ignore
+        }
+        return value;
+      };
+
+      if (eventName === 'css') {
+        const cssValue =
+          payload && typeof (payload as any).css === 'string'
+            ? (payload as any).css
+            : data;
+        llmCssRef.current = cssValue;
+        setLlmCss(cssValue);
+
+        const partialHtml = buildHtml(
+          llmCssRef.current,
+          llmOutlineRef.current,
+          llmSectionsRef.current,
+          llmSectionOrderRef.current,
+        );
+        if (partialHtml) setLlmHtml(partialHtml);
+        return;
+      }
+
+      if (eventName === 'section' || eventName.startsWith('section:')) {
+        const key =
+          eventName === 'section'
+            ? ((payload as any)?.id ?? (payload as any)?.section ?? 'section')
+            : eventName.slice('section:'.length) || (payload as any)?.id || 'section';
+        const html =
+          payload && typeof (payload as any).html === 'string'
+            ? (payload as any).html
+            : extractHtml(data);
+        const nextSections = { ...llmSectionsRef.current, [key]: html };
+        llmSectionsRef.current = nextSections;
+        setLlmSections(nextSections);
+
+        const nextOrder = llmSectionOrderRef.current.includes(key)
+          ? llmSectionOrderRef.current
+          : [...llmSectionOrderRef.current, key];
+        llmSectionOrderRef.current = nextOrder;
+        setLlmSectionOrder(nextOrder);
+
+        const partialHtml = buildHtml(
+          llmCssRef.current,
+          llmOutlineRef.current,
+          nextSections,
+          nextOrder,
+        );
+        if (partialHtml) setLlmHtml(partialHtml);
+        return;
+      }
+
+      if (eventName === 'html') {
+        applyFinalPayload({
+          ...(payload ?? {}),
+          html:
+            payload && typeof (payload as any).html === 'string'
+              ? (payload as any).html
+              : extractHtml(data),
+        });
+        return;
+      }
+
+      if (eventName === 'done') {
+        applyFinalPayload(payload ?? {});
+        return;
+      }
+
+      if (eventName === 'error') {
+        const message =
+          ((payload as any)?.error ?? (payload as any)?.message ?? data) ||
+          'Ошибка генерации HTML. Попробуйте ещё раз.';
+        const hasRenderablePayload =
+          payload &&
+          typeof payload === 'object' &&
+          (typeof (payload as any).html === 'string' ||
+            typeof (payload as any).css === 'string' ||
+            (payload as any).sections);
+
+        if (hasRenderablePayload) {
+          applyFinalPayload({
+            ...(payload as any),
+            html:
+              (payload as any)?.html && typeof (payload as any).html === 'string'
+                ? (payload as any).html
+                : extractHtml(data),
+          });
+          return;
+        }
+
+        setLlmError(typeof message === 'string' ? message : String(message));
+        setIsSendingPrompt(false);
+        cleanupStream();
+      }
+    },
+    [applyFinalPayload, buildHtml, cleanupStream, parseJsonSafe],
+  );
+
+  const startHtmlStream = useCallback(
+    (jobId: string) => {
+      const controller = new AbortController();
+      streamControllerRef.current = controller;
+
+      const run = async () => {
+        try {
+          const response = await fetch(
+            `${apiBaseUrl}/api/v1/html/stream?jobId=${encodeURIComponent(jobId)}&debug=1`,
+            {
+              method: 'GET',
+              signal: controller.signal,
+              credentials: 'include',
+              headers: { Accept: 'text/event-stream' },
+            },
+          );
+
+          if (!response.ok) {
+            throw new Error(`Stream failed: ${response.status} ${response.statusText}`);
+          }
+
+          if (!response.body) {
+            throw new Error('Пустой ответ от LLM при стриминге.');
+          }
+
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = '';
+
+          while (true) {
+            const { value, done } = await reader.read();
+            buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+            const events = buffer.split('\n\n');
+            buffer = events.pop() ?? '';
+
+            for (const rawEvent of events) {
+              const parsed = parseSseEvent(rawEvent);
+              handleStreamEvent(parsed.event, parsed.data);
+            }
+
+            if (done) break;
+          }
+
+          if (buffer.trim().length > 0) {
+            const parsed = parseSseEvent(buffer);
+            handleStreamEvent(parsed.event, parsed.data);
+          }
+        } catch (error) {
+          if (controller.signal.aborted) return;
+          console.error('HTML stream error', error);
+          setLlmError('Ошибка при получении потока. Попробуйте снова.');
+          setIsSendingPrompt(false);
+        } finally {
+          if (!controller.signal.aborted) {
+            streamControllerRef.current = null;
+          }
+        }
+      };
+
+      void run();
+    },
+    [apiBaseUrl, handleStreamEvent, parseSseEvent],
+  );
+
+  const handlePromptSubmit = useCallback(async () => {
+    const prompt = promptInput.trim();
+    if (!prompt || isSendingPrompt || !isWorkshopLesson) return;
+
+    cleanupStream();
+    setIsSendingPrompt(true);
+    setLlmError(null);
+    setLlmHtml(null);
+    setLlmCss(null);
+    setLlmSections({});
+    setLlmSectionOrder([]);
+    setLlmOutline(null);
+    llmCssRef.current = null;
+    llmSectionsRef.current = {};
+    llmSectionOrderRef.current = [];
+    llmOutlineRef.current = null;
+
+    try {
+      const response = await apiFetch<{ jobId?: string; outline?: unknown }>(
+        '/api/v1/html/start',
+        {
+          method: 'POST',
+          body: JSON.stringify({ prompt, lessonId: activeLesson.id }),
+        },
+      );
+
+      if (!response?.jobId) {
+        throw new Error('Сервер не вернул идентификатор задачи генерации.');
+      }
+
+      setLlmOutline(response.outline ?? null);
+      startHtmlStream(response.jobId);
+    } catch (error) {
+      console.error('Failed to send prompt to LLM', error);
+      const message =
+        error instanceof Error ? error.message : 'Ошибка при запросе LLM. Попробуйте ещё раз.';
+      setLlmError(message);
+      setIsSendingPrompt(false);
+    }
+  }, [
+    activeLesson.id,
+    cleanupStream,
+    isSendingPrompt,
+    isWorkshopLesson,
+    promptInput,
+    startHtmlStream,
+  ]);
+
   const ctaData = useMemo(() => {
     const { blocks } = activeLesson;
     const extract = (block: unknown) => {
@@ -303,23 +782,71 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
         // Default interactive playground for text-based lessons
         return (
           <div className="flex flex-col h-full bg-[#050914] border-l border-white/5">
-             <div className="flex-1 p-6 border-b border-white/5 flex flex-col items-center justify-center text-slate-600">
-                <FileText className="w-16 h-16 mb-4 opacity-20" />
-                <p className="font-mono text-sm">Waiting for input...</p>
-                <p className="text-xs mt-2 opacity-50">В этом уроке нет интерактивного задания AI.</p>
-             </div>
-             <div className="h-1/3 p-4 bg-[#02050e]">
-                <div className="flex gap-2 mb-2">
-                    <div className="w-3 h-3 rounded-full bg-red-500/20"></div>
-                    <div className="w-3 h-3 rounded-full bg-yellow-500/20"></div>
-                    <div className="w-3 h-3 rounded-full bg-green-500/20"></div>
-                </div>
-                <textarea 
-                    disabled 
-                    className="w-full h-full bg-transparent text-slate-500 text-sm resize-none font-mono focus:outline-none"
-                    placeholder="// Console ready..."
+            <div className="flex-1 border-b border-white/5 relative overflow-hidden">
+              {iframeHtml ? (
+                <iframe
+                  key={`${activeLesson.id}-${iframeHtml.length}`}
+                  srcDoc={iframeHtml}
+                  title="LLM Generated Site"
+                  className="w-full h-full bg-black"
+                  sandbox="allow-scripts allow-same-origin"
                 />
-             </div>
+              ) : (
+                <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-400 gap-3 p-6 text-center">
+                  {isSendingPrompt ? (
+                    <>
+                      <div className="w-10 h-10 border-2 border-white/10 border-t-vibe-500 rounded-full animate-spin"></div>
+                      <p className="font-mono text-sm text-slate-200">Генерируем сайт...</p>
+                    </>
+                  ) : (
+                    <>
+                      <FileText className="w-16 h-16 opacity-20" />
+                      <p className="font-mono text-sm">Waiting for input...</p>
+                      {!isWorkshopLesson && (
+                        <p className="text-xs mt-1 opacity-50">
+                          В этом уроке нет интерактивного задания AI.
+                        </p>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+            <div className="h-1/3 p-4 bg-[#02050e] flex flex-col">
+              <div className="flex gap-2 mb-2">
+                <div className="w-3 h-3 rounded-full bg-red-500/20"></div>
+                  <div className="w-3 h-3 rounded-full bg-yellow-500/20"></div>
+                  <div className="w-3 h-3 rounded-full bg-green-500/20"></div>
+                </div>
+              {llmError && !iframeHtml && (
+                <div className="text-xs text-red-200 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2 mb-2">
+                  {llmError}
+                </div>
+              )}
+              <div className="relative flex-1 mt-1">
+                <textarea
+                  disabled={!isWorkshopLesson}
+                  value={promptInput}
+                  onChange={(e) => setPromptInput(e.target.value)}
+                  className={`w-full h-full bg-transparent text-sm resize-none font-mono focus:outline-none pr-28 ${
+                    isWorkshopLesson ? 'text-slate-200' : 'text-slate-500'
+                  }`}
+                  placeholder="// Console ready..."
+                />
+                {isWorkshopLesson && promptInput.trim().length > 0 && (
+                  <button
+                    type="button"
+                    onClick={handlePromptSubmit}
+                    disabled={isSendingPrompt}
+                    className="absolute bottom-3 right-3 px-3 py-1.5 rounded-lg bg-vibe-600 text-white text-xs font-semibold flex items-center gap-2 shadow-lg shadow-vibe-900/30 hover:bg-vibe-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    style={{ cursor: 'pointer' }}
+                  >
+                    <Send className="w-4 h-4" />
+                    {isSendingPrompt ? 'Отправляем...' : 'Отправить'}
+                  </button>
+                )}
+              </div>
+            </div>
           </div>
         );
     }
