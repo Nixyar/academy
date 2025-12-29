@@ -5,7 +5,7 @@ import { AuthModal } from './components/AuthModal';
 import { ProfilePage } from './components/ProfilePage';
 import { AuthCallback } from './components/AuthCallback';
 import { Course, CourseProgress, User } from './types';
-import { logout, me } from './services/authApi';
+import { logout, me, refreshSession } from './services/authApi';
 import { clearSupabaseStoredSession, supabase } from './services/supabaseClient';
 import { userFromProfile } from './services/userFromProfile';
 import { fetchCourseLessons, fetchCourses } from './services/coursesApi';
@@ -165,6 +165,11 @@ const App: React.FC = () => {
     bootstrapPromiseRef.current = (async () => {
       setBootstrapping(true);
       try {
+        try {
+          await refreshSession();
+        } catch {
+          // Ignore missing/expired sessions; we'll handle it via /me below
+        }
         const profile = await me();
         setUser(userFromProfile(profile));
         setHasFetchedProfile(true);
