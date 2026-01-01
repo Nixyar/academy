@@ -426,15 +426,17 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
       stylePieces.push(llmCss);
     }
     const styleTag = `<style>${stylePieces.join('\n')}</style>`;
+    const tailwindScriptTag = `<script src="https://cdn.tailwindcss.com"></script>`;
+    const headInjection = `${tailwindScriptTag}${styleTag}`;
 
     const ensureHead = (html: string) => {
       if (/<head[^>]*>/i.test(html)) {
-        return html.replace(/<head[^>]*>/i, (match) => `${match}${styleTag}`);
+        return html.replace(/<head[^>]*>/i, (match) => `${match}${headInjection}`);
       }
       if (/<html[^>]*>/i.test(html)) {
-        return html.replace(/<html[^>]*>/i, (match) => `${match}<head>${styleTag}</head>`);
+        return html.replace(/<html[^>]*>/i, (match) => `${match}<head>${headInjection}</head>`);
       }
-      return `${styleTag}\n${html}`;
+      return `${headInjection}\n${html}`;
     };
 
     const withHead = ensureHead(raw);
@@ -471,6 +473,16 @@ ${withHead}
               payloadSections[key] = (parsedSection as any).html as string;
             } else {
               payloadSections[key] = value;
+            }
+          } else if (value && typeof value === 'object') {
+            const htmlValue =
+              typeof (value as any).html === 'string'
+                ? (value as any).html
+                : typeof (value as any).content === 'string'
+                  ? (value as any).content
+                  : null;
+            if (htmlValue) {
+              payloadSections[key] = htmlValue;
             }
           }
         });
@@ -526,8 +538,13 @@ ${withHead}
   );
 
   const handleStreamEvent = useCallback(
-    (eventName: string, data: string) => {
+    (incomingEventName: string, data: string) => {
       const payload = parseJsonSafe(data);
+      const payloadType =
+        payload && typeof payload === 'object' && typeof (payload as any).type === 'string'
+          ? ((payload as any).type as string)
+          : null;
+      const eventName = (incomingEventName || payloadType || 'message').toLowerCase();
       const extractHtml = (value: string) => {
         try {
           const parsed = JSON.parse(value);
@@ -544,7 +561,9 @@ ${withHead}
         const cssValue =
           payload && typeof (payload as any).css === 'string'
             ? (payload as any).css
-            : data;
+            : payload && typeof (payload as any).content === 'string'
+              ? (payload as any).content
+              : data;
         llmCssRef.current = cssValue;
         setLlmCss(cssValue);
 
@@ -566,7 +585,9 @@ ${withHead}
         const html =
           payload && typeof (payload as any).html === 'string'
             ? (payload as any).html
-            : extractHtml(data);
+            : payload && typeof (payload as any).content === 'string'
+              ? (payload as any).content
+              : extractHtml(data);
         const nextSections = { ...llmSectionsRef.current, [key]: html };
         llmSectionsRef.current = nextSections;
         setLlmSections(nextSections);
@@ -593,13 +614,22 @@ ${withHead}
           html:
             payload && typeof (payload as any).html === 'string'
               ? (payload as any).html
-              : extractHtml(data),
+              : payload && typeof (payload as any).content === 'string'
+                ? (payload as any).content
+                : extractHtml(data),
         });
         return;
       }
 
       if (eventName === 'done') {
-        applyFinalPayload(payload ?? {});
+        const finalPayload =
+          payload &&
+          typeof payload === 'object' &&
+          typeof (payload as any).html !== 'string' &&
+          typeof (payload as any).content === 'string'
+            ? { ...(payload as any), html: (payload as any).content }
+            : payload ?? {};
+        applyFinalPayload(finalPayload);
         return;
       }
 
@@ -641,7 +671,7 @@ ${withHead}
       const run = async () => {
         try {
           const response = await fetch(
-            `${apiBaseUrl}/api/v1/html/stream?jobId=${encodeURIComponent(jobId)}&debug=1`,
+            `${apiBaseUrl}/api/v1/html/stream?jobId=${encodeURIComponent(jobId)}`,
             {
               method: 'GET',
               signal: controller.signal,
