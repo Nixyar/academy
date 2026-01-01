@@ -61,6 +61,17 @@ export async function apiFetch<T>(
 
   if (response.status === 204) return null as T;
 
-  const json = (await readJsonSafe(response)) as T;
-  return json;
+  const contentType = response.headers.get('content-type') ?? '';
+
+  if (contentType.includes('application/json')) {
+    try {
+      return (await response.json()) as T;
+    } catch {
+      return null as T;
+    }
+  }
+
+  const text = await response.text();
+  const hasContent = text.trim().length > 0;
+  return (hasContent ? (text as unknown as T) : (null as T));
 }
