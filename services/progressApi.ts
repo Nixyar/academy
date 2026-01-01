@@ -1,0 +1,74 @@
+import { apiFetch } from './apiClient';
+import type { CourseProgress, LessonStatus } from '../types';
+
+export type CourseProgressPatch =
+  | { op: 'quiz_answer'; lessonId: string; quizId: string; answer: unknown }
+  | { op: 'lesson_status'; lessonId: string; status: LessonStatus; completedAt?: string | null }
+  | { op: 'set_resume'; lessonId: string }
+  | { op: 'touch_lesson'; lessonId: string };
+
+type ProgressEnvelope = { course_id?: string; progress?: CourseProgress };
+type ProgressMapResponse = { progress?: Record<string, CourseProgress | undefined> };
+type ResumeResponse = { lesson_id: string | null };
+
+function normalizeCourseProgress(payload: unknown): CourseProgress {
+  if (!payload || typeof payload !== 'object') return {};
+  const withProgress = (payload as ProgressEnvelope).progress;
+  if (withProgress && typeof withProgress === 'object') {
+    return withProgress;
+  }
+  return payload as CourseProgress;
+}
+
+export async function fetchCourseProgress(courseId: string): Promise<CourseProgress> {
+  const response = await apiFetch<ProgressEnvelope | CourseProgress | null>(
+    `/api/courses/${courseId}/progress`,
+  );
+  return normalizeCourseProgress(response);
+}
+
+export async function upsertCourseProgress(
+  courseId: string,
+  progress: CourseProgress,
+): Promise<CourseProgress> {
+  const response = await apiFetch<ProgressEnvelope | CourseProgress>(
+    `/api/courses/${courseId}/progress`,
+    {
+      method: 'PUT',
+      body: JSON.stringify({ progress }),
+    },
+  );
+  return normalizeCourseProgress(response);
+}
+
+export async function patchCourseProgress(
+  courseId: string,
+  patch: CourseProgressPatch,
+): Promise<CourseProgress> {
+  const response = await apiFetch<ProgressEnvelope | CourseProgress>(
+    `/api/courses/${courseId}/progress`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    },
+  );
+  return normalizeCourseProgress(response);
+}
+
+export async function fetchCourseResume(courseId: string): Promise<ResumeResponse> {
+  return apiFetch<ResumeResponse>(`/api/courses/${courseId}/resume`);
+}
+
+export async function fetchCoursesProgress(
+  courseIds: string[],
+): Promise<Record<string, CourseProgress>> {
+  if (courseIds.length === 0) return {};
+  const query = encodeURIComponent(courseIds.join(','));
+  const response = await apiFetch<ProgressMapResponse>(`/api/progress?courseIds=${query}`);
+  const progressMap = response.progress ?? {};
+
+  return courseIds.reduce<Record<string, CourseProgress>>((acc, id) => {
+    acc[id] = normalizeCourseProgress(progressMap[id] ?? {});
+    return acc;
+  }, {});
+}

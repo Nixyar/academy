@@ -24,6 +24,10 @@ export async function logout(): Promise<void> {
   await apiFetch('/api/auth/logout', { method: 'POST' }, { retryOn401: false });
 }
 
+export async function refreshSession(): Promise<void> {
+  await apiFetch('/api/auth/refresh', { method: 'POST' }, { retryOn401: false });
+}
+
 export async function me(): Promise<BackendProfile> {
   return apiFetch<BackendProfile>('/api/me', { method: 'GET' });
 }
