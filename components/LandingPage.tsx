@@ -1,6 +1,6 @@
 import React from 'react';
 import {Course, User} from '../types';
-import {Play, Code, Zap, Rocket, CheckCircle, Sparkles, Terminal, Shield} from 'lucide-react';
+import {Play, Code, Zap, Rocket, Sparkles, Terminal, Shield} from 'lucide-react';
 
 interface LandingPageProps {
   courses: Course[];
@@ -293,69 +293,6 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                     </div>
                   </div>
               ))}
-            </div>
-          </div>
-        </section>
-
-        {/* Pricing Section */}
-        <section id="pricing" className="py-32 relative overflow-hidden">
-          <div
-              className="absolute inset-0 bg-gradient-to-b from-void via-purple-900/10 to-void pointer-events-none"></div>
-
-          <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center relative z-10">
-            <h2 className="text-4xl md:text-5xl font-bold font-display mb-6">All In One. <span
-                className="text-purple-400">Pro Vibe.</span></h2>
-            <p className="text-slate-400 mb-16 text-lg">Единая подписка. Бесконечный поток
-              обновлений.</p>
-
-            <div className="relative group mx-auto max-w-lg">
-              {/* Glow behind card */}
-              <div
-                  className="absolute -inset-1 bg-gradient-to-r from-vibe-glow via-purple-glow to-pink-glow rounded-[2.5rem] blur opacity-25 group-hover:opacity-75 transition duration-1000 group-hover:duration-200"></div>
-
-              <div
-                  className="relative bg-[#0a0f1e] ring-1 ring-white/10 rounded-[2rem] p-10 md:p-14 shadow-2xl backdrop-blur-xl">
-                <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2">
-                  <div
-                      className="bg-gradient-to-r from-purple-500 to-pink-500 text-white px-6 py-2 rounded-full text-xs font-bold shadow-lg shadow-purple-500/30 uppercase tracking-widest font-display">
-                    Best Value
-                  </div>
-                </div>
-
-                <h3 className="text-3xl font-bold text-white mb-2 mt-4 font-display">Vibe Pro
-                  Access</h3>
-                <div className="flex items-baseline justify-center gap-2 mb-10">
-                  <span
-                      className="text-6xl font-black text-transparent bg-clip-text bg-gradient-to-br from-white to-slate-400 font-display">1499₽</span>
-                  <span className="text-slate-500 font-medium">/ месяц</span>
-                </div>
-
-                <ul className="text-left space-y-5 mb-12">
-                  {[
-                    'VibeCoderAI (до 50 запросов в день)',
-                    'Расширенные лимиты в PRO',
-                    'Готовые промпты под разные задачи',
-                    'Закрытые модули и направления',
-                  ].map((item, i) => (
-                      <li key={i} className="flex items-center gap-4">
-                        <div
-                            className="w-6 h-6 rounded-full bg-green-500/20 flex items-center justify-center flex-shrink-0">
-                          <CheckCircle className="w-3.5 h-3.5 text-green-400"/>
-                        </div>
-                        <span className="text-slate-300 font-medium">{item}</span>
-                      </li>
-                  ))}
-                </ul>
-
-                <button
-                    onClick={onSubscribe}
-                    disabled={isSubscribed}
-                    className="w-full py-5 rounded-xl text-lg font-bold transition-all shadow-[0_0_25px_rgba(188,19,254,0.3)] hover:shadow-[0_0_40px_rgba(188,19,254,0.5)] hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 disabled:shadow-none bg-gradient-to-r from-vibe-600 via-purple-600 to-pink-600 text-white font-display"
-                >
-                  {isSubscribed ? 'Подписка Активна' : 'Оформить Подписку'}
-                </button>
-                <p className="mt-6 text-xs text-slate-500">Отмена в любое время. Гарантия вайба.</p>
-              </div>
             </div>
           </div>
         </section>
