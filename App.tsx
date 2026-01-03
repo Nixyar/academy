@@ -125,6 +125,8 @@ const App: React.FC = () => {
   }, [user?.id]);
 
   useEffect(() => {
+    if (isAuthCallbackPath) return;
+
     if (coursesLoadedRef.current) return;
     coursesLoadedRef.current = true;
 
@@ -174,6 +176,8 @@ const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    if (isAuthCallbackPath) return;
+
     if (bootstrapPromiseRef.current) return;
 
     bootstrapPromiseRef.current = (async () => {
