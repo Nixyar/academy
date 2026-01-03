@@ -32,7 +32,7 @@ export function AuthCallback(props: { onAuthenticated: (user: User) => void }) {
         if (cancelled) return;
         props.onAuthenticated(user);
 
-        window.history.replaceState({}, '', '/');
+        window.history.replaceState({}, '', '/profile');
       } catch (e: any) {
         if (cancelled) return;
         const message =
