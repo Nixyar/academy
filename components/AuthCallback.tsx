@@ -7,6 +7,7 @@ import type { User } from '../types';
 
 export function AuthCallback(props: { onAuthenticated: (user: User) => void }) {
   const [error, setError] = useState<string | null>(null);
+  const [stage, setStage] = useState<'idle' | 'exchanging' | 'saving' | 'loadingProfile' | 'redirecting'>('idle');
   const hasRunRef = useRef(false);
 
   useEffect(() => {
@@ -17,6 +18,7 @@ export function AuthCallback(props: { onAuthenticated: (user: User) => void }) {
     async function run() {
       try {
         if (!supabase) throw new Error('SUPABASE_ENV_MISSING');
+        setStage('exchanging');
 
         const code = new URLSearchParams(window.location.search).get('code');
         if (!code) throw new Error('OAUTH_CODE_MISSING');
@@ -25,15 +27,24 @@ export function AuthCallback(props: { onAuthenticated: (user: User) => void }) {
         if (exchangeError) throw exchangeError;
         if (!data.session) throw new Error('SESSION_MISSING');
 
+        setStage('saving');
         await setSession(data.session.access_token, data.session.refresh_token);
 
+        setStage('loadingProfile');
         const profile = await me();
         const user = userFromProfile(profile);
 
         if (cancelled) return;
+        setStage('redirecting');
         props.onAuthenticated(user);
         // Force navigation so we definitely leave the callback screen even if SPA routing listeners fail
         window.location.replace('/profile');
+        // Extra safety: in case replace is blocked, retry once shortly after
+        setTimeout(() => {
+          if (window.location.pathname.startsWith('/auth/callback')) {
+            window.location.assign('/profile');
+          }
+        }, 500);
       } catch (e: any) {
         if (cancelled) return;
         console.error('Auth callback failed', e);
