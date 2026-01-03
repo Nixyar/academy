@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { supabase } from '../services/supabaseClient';
 import { me, setSession } from '../services/authApi';
+import { ApiError } from '../services/apiClient';
 import { userFromProfile } from '../services/userFromProfile';
 import type { User } from '../types';
 
@@ -35,12 +36,15 @@ export function AuthCallback(props: { onAuthenticated: (user: User) => void }) {
         window.history.replaceState({}, '', '/profile');
       } catch (e: any) {
         if (cancelled) return;
+        console.error('Auth callback failed', e);
         const message =
           e?.message === 'SUPABASE_ENV_MISSING'
             ? 'Не настроены переменные окружения Supabase (VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY).'
             : e?.message === 'OAUTH_CODE_MISSING'
               ? 'Не найден параметр code в URL. Проверьте Redirect URL в Supabase.'
-              : e?.message || 'Ошибка авторизации.';
+              : e instanceof ApiError && e.status === 401
+                ? 'Не удалось сохранить сессию на бэкенде (401). Проверьте, что /api/auth/session возвращает httpOnly cookies с Access-Control-Allow-Credentials.'
+            : e?.message || 'Ошибка авторизации.';
         setError(message);
       }
     }
