@@ -107,8 +107,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, courses, onLogou
                         <div>
                             <div className="text-[11px] text-slate-500 uppercase font-bold tracking-wider">Vibecoder AI</div>
                             <div className="flex items-baseline gap-2">
-                                <span className="text-3xl font-black font-display text-white">{remainingCalls}</span>
-                                <span className="text-lg font-semibold text-slate-500">/{totalCalls}</span>
+                                <span className="text-3xl font-black font-display text-white">∞</span>
                             </div>
                             <div className="text-xs text-slate-500 font-medium">осталось вызовов</div>
                         </div>
@@ -116,7 +115,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, courses, onLogou
                 </div>
             </div>
 
-            {/* Subscription Card (Mini) */}
+            {/* Subscription Card (Mini) — временно скрыто вместе с логикой
             <div className={`p-6 rounded-2xl border flex flex-col items-start gap-4 w-full md:w-80 backdrop-blur-sm
                 ${user.isSubscribed 
                     ? 'bg-gradient-to-br from-green-500/10 to-emerald-500/5 border-green-500/20' 
@@ -136,6 +135,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, courses, onLogou
                     </button>
                 )}
             </div>
+            */}
         </div>
 
         {/* My Courses Section */}
