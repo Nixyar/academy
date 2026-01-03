@@ -46,6 +46,7 @@ export interface Lesson {
   sortOrder?: number | null;
   blocks?: unknown;
   initialCode?: string; // For code gen lessons
+  unlock_rule?: unknown; // unlock conditions from backend (raw shape)
 }
 
 export interface User {
