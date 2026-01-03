@@ -125,10 +125,6 @@ const App: React.FC = () => {
   }, [user?.id]);
 
   useEffect(() => {
-    progressFetchKeyRef.current = null;
-  }, [user?.id]);
-
-  useEffect(() => {
     if (coursesLoadedRef.current) return;
     coursesLoadedRef.current = true;
 
