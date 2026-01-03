@@ -32,8 +32,8 @@ export function AuthCallback(props: { onAuthenticated: (user: User) => void }) {
 
         if (cancelled) return;
         props.onAuthenticated(user);
-
-        window.history.replaceState({}, '', '/profile');
+        // Force navigation so we definitely leave the callback screen even if SPA routing listeners fail
+        window.location.replace('/profile');
       } catch (e: any) {
         if (cancelled) return;
         console.error('Auth callback failed', e);
