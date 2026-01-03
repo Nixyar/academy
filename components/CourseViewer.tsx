@@ -58,6 +58,39 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
   const llmSectionOrderRef = useRef<string[]>([]);
   const llmOutlineRef = useRef<unknown>(null);
   const streamControllerRef = useRef<AbortController | null>(null);
+  const streamingJobIdRef = useRef<string | null>(null);
+  const lastLessonIdRef = useRef<string>(course.lessons[activeLessonIndex]?.id ?? '');
+  const fetchedResultJobIdRef = useRef<string | null>(null);
+  const rawActiveJob = (courseProgress as any)?.active_job;
+  const rawActiveJobStatus =
+    (courseProgress as any)?.active_job_status ??
+    (rawActiveJob && typeof rawActiveJob === 'object' ? (rawActiveJob as any).status : null);
+  const activeJobStatus = rawActiveJobStatus ?? null;
+  const rawActiveJobId =
+    typeof (courseProgress as any)?.active_job_id === 'string'
+      ? (courseProgress as any).active_job_id
+      : rawActiveJob && typeof rawActiveJob === 'object'
+        ? (typeof (rawActiveJob as any).jobId === 'string'
+            ? (rawActiveJob as any).jobId
+            : typeof (rawActiveJob as any).job_id === 'string'
+              ? (rawActiveJob as any).job_id
+              : null)
+        : null;
+  const activeJobId = typeof rawActiveJobId === 'string' ? rawActiveJobId : null;
+  const rawActiveJobPrompt =
+    (courseProgress as any)?.active_job_prompt ??
+    (rawActiveJob && typeof rawActiveJob === 'object' ? (rawActiveJob as any).prompt : null);
+  const activeJobPrompt = typeof rawActiveJobPrompt === 'string' ? rawActiveJobPrompt : '';
+  const isPromptLocked = Boolean(activeJobStatus);
+  const savedResultHtml =
+    typeof (courseProgress as any)?.result?.html === 'string'
+      ? ((courseProgress as any).result as any).html
+      : typeof (courseProgress as any)?.result_html === 'string'
+        ? ((courseProgress as any).result_html as any)
+        : typeof (courseProgress as any)?.lessons?.[activeLesson.id]?.result?.html === 'string'
+          ? ((courseProgress as any).lessons?.[activeLesson.id]?.result as any).html
+          : '';
+  const hasCompletedJob = activeJobStatus === 'done';
 
   const syncProgress = useCallback(
     (next: CourseProgress) => {
@@ -72,16 +105,90 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
   }, [initialProgress, course.id]);
 
   const applyProgressPatch = useCallback(
-    async (patch: Parameters<typeof patchCourseProgress>[1]) => {
+    async (patch: Parameters<typeof patchCourseProgress>[1]): Promise<CourseProgress | undefined> => {
       try {
         const updated = await patchCourseProgress(course.id, patch);
         syncProgress(updated ?? {});
+        return updated ?? {};
       } catch (error) {
         console.error('Failed to update progress', error);
+        return undefined;
       }
     },
     [course.id, syncProgress],
   );
+
+  const getValueByPath = useCallback((source: unknown, path: string): unknown => {
+    if (!path) return undefined;
+    return path.split('.').reduce((acc: any, key) => (acc && typeof acc === 'object' ? acc[key] : undefined), source);
+  }, []);
+
+  const isNonEmpty = (value: unknown) => {
+    if (value === null || value === undefined) return false;
+    if (typeof value === 'string') return value.trim().length > 0;
+    if (Array.isArray(value)) return value.length > 0;
+    if (typeof value === 'object') return Object.keys(value as object).length > 0;
+    return true;
+  };
+
+  const evaluateUnlockRule = useCallback(
+    (rule: any, data: unknown): boolean => {
+      if (typeof rule === 'string') {
+        try {
+          const parsed = JSON.parse(rule);
+          return evaluateUnlockRule(parsed, data);
+        } catch {
+          return true;
+        }
+      }
+
+      if (!rule) return true;
+      if (rule && typeof rule === 'object' && Object.keys(rule).length === 0) return true;
+
+      if (Array.isArray(rule.allOf)) {
+        return rule.allOf.every((child) => evaluateUnlockRule(child, data));
+      }
+
+      if (Array.isArray(rule.anyOf)) {
+        return rule.anyOf.some((child) => evaluateUnlockRule(child, data));
+      }
+
+      const op = rule.op;
+      const path = typeof rule.path === 'string' ? rule.path : '';
+      const value = getValueByPath(data, path);
+
+      switch (op) {
+        case 'exists':
+          return path ? value !== undefined : false;
+        case 'notEmpty':
+          return path ? isNonEmpty(value) : false;
+        case 'equals':
+          return path ? value === rule.value : false;
+        default:
+          return true;
+      }
+    },
+    [getValueByPath],
+  );
+
+  const unlockedLessonIds = useMemo(() => {
+    const unlocked = new Set<string>();
+    unlocked.add(activeLesson.id);
+
+    const lessonProgressMap = courseProgress?.lessons ?? {};
+    Object.entries(lessonProgressMap).forEach(([lessonId, progress]) => {
+      if (progress?.status === 'completed' || progress?.status === 'in_progress') {
+        unlocked.add(lessonId);
+      }
+    });
+
+    const resumeId = courseProgress?.resume_lesson_id;
+    const lastViewedId = courseProgress?.last_viewed_lesson_id;
+    if (typeof resumeId === 'string') unlocked.add(resumeId);
+    if (typeof lastViewedId === 'string') unlocked.add(lastViewedId);
+
+    return unlocked;
+  }, [activeLesson.id, courseProgress]);
 
   useEffect(() => {
     let cancelled = false;
@@ -106,6 +213,16 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
 
         const nextLesson = course.lessons[nextLessonIndex];
         if (nextLesson) {
+          const nextLessonStatus = progressData?.lessons?.[nextLesson.id]?.status;
+
+          if (nextLessonStatus !== 'completed') {
+            await applyProgressPatch({
+              op: 'lesson_status',
+              lessonId: nextLesson.id,
+              status: 'in_progress',
+            });
+          }
+
           await applyProgressPatch({
             op: 'set_resume',
             lessonId: nextLesson.id,
@@ -145,6 +262,26 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     () => (activeLesson.lessonType ?? '').toLowerCase() === 'workshop',
     [activeLesson.lessonType],
   );
+
+  const activeLessonProgress = useMemo(
+    () => courseProgress?.lessons?.[activeLesson.id],
+    [activeLesson.id, courseProgress?.lessons],
+  );
+
+  const isCtaUnlocked = useMemo(() => {
+    const unlockRuleRaw = (activeLesson as any)?.unlock_rule;
+    let unlockRule: any = unlockRuleRaw;
+    if (typeof unlockRuleRaw === 'string') {
+      try {
+        unlockRule = JSON.parse(unlockRuleRaw);
+      } catch {
+        unlockRule = undefined;
+      }
+    }
+
+    if (!unlockRule) return true;
+    return evaluateUnlockRule(unlockRule, activeLessonProgress);
+  }, [activeLesson, activeLessonProgress, evaluateUnlockRule]);
 
   const quizBlock = useMemo(() => {
     const { blocks } = activeLesson;
@@ -209,23 +346,66 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
   }, [activeLesson.id, courseProgress, quizBlock]);
 
   useEffect(() => {
-    setPromptInput('');
-    setIsSendingPrompt(false);
-    setLlmHtml(null);
-    setLlmError(null);
-    setLlmOutline(null);
+    const lessonChanged = activeLesson.id !== lastLessonIdRef.current;
+    lastLessonIdRef.current = activeLesson.id;
+    const keepStreamAlive =
+      !lessonChanged &&
+      activeJobStatus === 'running' &&
+      activeJobId &&
+      streamingJobIdRef.current === activeJobId;
+    const hasSavedHtml = Boolean(savedResultHtml && savedResultHtml.trim());
+
+    setPromptInput(isPromptLocked ? activeJobPrompt : '');
+    if (keepStreamAlive) {
+      // Keep spinner while we continue streaming the same job
+      setIsSendingPrompt(true);
+    } else {
+      setIsSendingPrompt(activeJobStatus === 'running' && !hasSavedHtml);
+      setLlmHtml(hasSavedHtml ? savedResultHtml : null);
+      setLlmError(null);
+      setLlmOutline(null);
+      setLlmCss(null);
+      setLlmSections({});
+      setLlmSectionOrder([]);
+      llmCssRef.current = null;
+      llmSectionsRef.current = {};
+      llmSectionOrderRef.current = [];
+      llmOutlineRef.current = null;
+      if (streamControllerRef.current) {
+        streamControllerRef.current.abort();
+        streamControllerRef.current = null;
+      }
+      streamingJobIdRef.current = keepStreamAlive ? streamingJobIdRef.current : null;
+    }
+  }, [
+    activeJobId,
+    activeJobPrompt,
+    activeJobStatus,
+    activeLesson.id,
+    isPromptLocked,
+    savedResultHtml,
+  ]);
+
+  useEffect(() => {
+    if (!isPromptLocked) return;
+    setPromptInput(activeJobPrompt);
+  }, [activeJobPrompt, isPromptLocked]);
+
+  useEffect(() => {
+    if (!hasCompletedJob) return;
+    if (!savedResultHtml || typeof savedResultHtml !== 'string' || !savedResultHtml.trim()) return;
+    setLlmHtml((current) => (current === savedResultHtml ? current : savedResultHtml));
     setLlmCss(null);
     setLlmSections({});
     setLlmSectionOrder([]);
+    setLlmOutline(null);
     llmCssRef.current = null;
     llmSectionsRef.current = {};
     llmSectionOrderRef.current = [];
     llmOutlineRef.current = null;
-    if (streamControllerRef.current) {
-      streamControllerRef.current.abort();
-      streamControllerRef.current = null;
-    }
-  }, [activeLesson.id]);
+    setIsSendingPrompt(false);
+    setLlmError(null);
+  }, [hasCompletedJob, savedResultHtml]);
 
   useEffect(
     () => () => {
@@ -323,6 +503,10 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
       if (targetIndex === activeLessonIndex) return;
 
       const targetLesson = course.lessons[targetIndex];
+      const targetLessonStatus = courseProgress?.lessons?.[targetLesson.id]?.status;
+      const canAccessTarget = unlockedLessonIds.has(targetLesson.id) || options?.completeCurrent;
+      if (!canAccessTarget) return;
+
       const currentLesson = course.lessons[activeLessonIndex];
 
       setActiveLessonIndex(targetIndex);
@@ -338,13 +522,21 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
           });
         }
 
+        if (targetLessonStatus !== 'completed') {
+          await applyProgressPatch({
+            op: 'lesson_status',
+            lessonId: targetLesson.id,
+            status: 'in_progress',
+          });
+        }
+
         await applyProgressPatch({
           op: 'set_resume',
           lessonId: targetLesson.id,
         });
       })();
     },
-    [activeLessonIndex, applyProgressPatch, course.lessons],
+    [activeLessonIndex, applyProgressPatch, course.lessons, courseProgress?.lessons, unlockedLessonIds],
   );
 
   const parseSseEvent = useCallback((rawEvent: string): { event: string; data: string } => {
@@ -460,6 +652,7 @@ ${withHead}
       streamControllerRef.current.abort();
       streamControllerRef.current = null;
     }
+    streamingJobIdRef.current = null;
   }, []);
 
   const applyFinalPayload = useCallback(
@@ -665,6 +858,7 @@ ${withHead}
 
   const startHtmlStream = useCallback(
     (jobId: string) => {
+      streamingJobIdRef.current = jobId;
       const controller = new AbortController();
       streamControllerRef.current = controller;
 
@@ -729,7 +923,7 @@ ${withHead}
 
   const handlePromptSubmit = useCallback(async () => {
     const prompt = promptInput.trim();
-    if (!prompt || isSendingPrompt || !isWorkshopLesson) return;
+    if (!prompt || isSendingPrompt || !isWorkshopLesson || isPromptLocked) return;
 
     cleanupStream();
     setIsSendingPrompt(true);
@@ -758,6 +952,12 @@ ${withHead}
       }
 
       setLlmOutline(response.outline ?? null);
+      try {
+        const refreshedProgress = await fetchCourseProgress(course.id);
+        syncProgress(refreshedProgress ?? {});
+      } catch (progressError) {
+        console.error('Failed to refresh progress after start', progressError);
+      }
       startHtmlStream(response.jobId);
     } catch (error) {
       console.error('Failed to send prompt to LLM', error);
@@ -769,11 +969,66 @@ ${withHead}
   }, [
     activeLesson.id,
     cleanupStream,
+    course.id,
     isSendingPrompt,
     isWorkshopLesson,
+    isPromptLocked,
     promptInput,
     startHtmlStream,
+    syncProgress,
   ]);
+
+  useEffect(() => {
+    if (activeJobStatus !== 'running') {
+      streamingJobIdRef.current = null;
+      return;
+    }
+    if (!activeJobId) return;
+    if (streamingJobIdRef.current === activeJobId) return;
+
+    cleanupStream();
+    setIsSendingPrompt(true);
+    setLlmError(null);
+    startHtmlStream(activeJobId);
+  }, [activeJobId, activeJobStatus, cleanupStream, startHtmlStream]);
+
+  useEffect(() => {
+    if (activeJobStatus !== 'done') return;
+    if (!activeJobId) return;
+    if (savedResultHtml && savedResultHtml.trim()) return;
+    if (fetchedResultJobIdRef.current === activeJobId) return;
+
+    fetchedResultJobIdRef.current = activeJobId;
+    setIsSendingPrompt(true);
+
+    const loadResult = async () => {
+      try {
+        const result = await apiFetch<any>(
+          `/api/v1/html/result?jobId=${encodeURIComponent(activeJobId)}`,
+        );
+        applyFinalPayload(result ?? {});
+      } catch (error) {
+        console.error('Failed to fetch html result', error);
+        setLlmError('Не удалось загрузить результат генерации. Попробуйте ещё раз.');
+        setIsSendingPrompt(false);
+      }
+    };
+
+    void loadResult();
+  }, [
+    activeJobId,
+    activeJobStatus,
+    applyFinalPayload,
+    savedResultHtml,
+  ]);
+
+  useEffect(() => {
+    if (!savedResultHtml || !savedResultHtml.trim()) return;
+    setLlmHtml((current) => (current === savedResultHtml ? current : savedResultHtml));
+    if (activeJobStatus !== 'running') {
+      setIsSendingPrompt(false);
+    }
+  }, [activeJobStatus, savedResultHtml]);
 
   const ctaData = useMemo(() => {
     const { blocks } = activeLesson;
@@ -855,7 +1110,7 @@ ${withHead}
               )}
               <div className="relative flex-1 mt-1">
                 <textarea
-                  disabled={!isWorkshopLesson}
+                  disabled={!isWorkshopLesson || isPromptLocked}
                   value={promptInput}
                   onChange={(e) => setPromptInput(e.target.value)}
                   className={`w-full h-full bg-transparent text-sm resize-none font-mono focus:outline-none pr-28 ${
@@ -867,7 +1122,7 @@ ${withHead}
                   <button
                     type="button"
                     onClick={handlePromptSubmit}
-                    disabled={isSendingPrompt}
+                    disabled={isSendingPrompt || isPromptLocked}
                     className="absolute bottom-3 right-3 px-3 py-1.5 rounded-lg bg-vibe-600 text-white text-xs font-semibold flex items-center gap-2 shadow-lg shadow-vibe-900/30 hover:bg-vibe-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                     style={{ cursor: 'pointer' }}
                   >
@@ -916,29 +1171,34 @@ ${withHead}
                 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
             `}>
                 <div className="overflow-y-auto h-full pb-20 custom-scrollbar">
-                    {course.lessons.map((lesson, idx) => (
+                    {course.lessons.map((lesson, idx) => {
+                      const canNavigate = unlockedLessonIds.has(lesson.id);
+                      return (
                         <button
-                            key={lesson.id}
-                            onClick={() => goToLesson(idx)}
-                            className={`w-full text-left p-4 border-b border-white/5 hover:bg-white/5 transition-all flex items-start gap-3 group
-                                ${activeLessonIndex === idx ? 'bg-white/5 border-l-2 border-l-vibe-500' : 'border-l-2 border-l-transparent'}
-                            `}
+                          key={lesson.id}
+                          onClick={() => (canNavigate ? goToLesson(idx) : undefined)}
+                          disabled={!canNavigate}
+                          className={`w-full text-left p-4 border-b border-white/5 hover:bg-white/5 transition-all flex items-start gap-3 group
+                              ${activeLessonIndex === idx ? 'bg-white/5 border-l-2 border-l-vibe-500' : 'border-l-2 border-l-transparent'}
+                              ${canNavigate ? '' : 'opacity-50 cursor-not-allowed'}
+                          `}
                         >
-                            <div className={`mt-0.5 w-6 h-6 rounded flex items-center justify-center text-[10px] font-bold transition-colors
-                                ${activeLessonIndex === idx ? 'bg-vibe-500 text-white shadow-lg shadow-vibe-500/20' : 'bg-slate-800 text-slate-500 group-hover:bg-slate-700'}
-                            `}>
-                                {idx + 1}
-                            </div>
-                            <div>
-                                <h4 className={`text-sm font-medium mb-1 transition-colors ${activeLessonIndex === idx ? 'text-white' : 'text-slate-400 group-hover:text-slate-200'}`}>
-                                    {lesson.title}
-                                </h4>
-                                <span className="text-[10px] text-slate-600 uppercase tracking-wider font-bold">
-                                    {lesson.lessonTypeRu ?? lesson.lessonType ?? lesson.type ?? ''}
-                                </span>
-                            </div>
+                          <div className={`mt-0.5 w-6 h-6 rounded flex items-center justify-center text-[10px] font-bold transition-colors
+                              ${activeLessonIndex === idx ? 'bg-vibe-500 text-white shadow-lg shadow-vibe-500/20' : 'bg-slate-800 text-slate-500 group-hover:bg-slate-700'}
+                          `}>
+                              {idx + 1}
+                          </div>
+                          <div>
+                              <h4 className={`text-sm font-medium mb-1 transition-colors ${activeLessonIndex === idx ? 'text-white' : 'text-slate-400 group-hover:text-slate-200'}`}>
+                                  {lesson.title}
+                              </h4>
+                              <span className="text-[10px] text-slate-600 uppercase tracking-wider font-bold">
+                                  {lesson.lessonTypeRu ?? lesson.lessonType ?? lesson.type ?? ''}
+                              </span>
+                          </div>
                         </button>
-                    ))}
+                      );
+                    })}
                 </div>
             </aside>
 
@@ -1092,7 +1352,7 @@ ${withHead}
                                 Предыдущий
                             </button>
                             <button 
-                                disabled={activeLessonIndex === course.lessons.length - 1}
+                                disabled={activeLessonIndex === course.lessons.length - 1 || !isCtaUnlocked}
                                 onClick={() => goToLesson(activeLessonIndex + 1, { completeCurrent: true })}
                                 className="px-6 py-2.5 rounded-xl bg-vibe-600 text-white font-bold hover:bg-vibe-500 transition-colors shadow-lg shadow-vibe-900/20 disabled:opacity-50 text-sm flex items-center gap-2"
                                 data-action={ctaData.action ?? undefined}

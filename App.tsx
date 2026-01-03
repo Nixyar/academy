@@ -15,12 +15,12 @@ type View = 'landing' | 'course' | 'profile';
 
 type RouteState = {
   view: View;
-  courseId: string | null;
+  courseSlug: string | null;
 };
 
 const normalizeRoute = (route: RouteState): RouteState => {
-  if (route.view === 'course' && !route.courseId) {
-    return { view: 'landing', courseId: null };
+  if (route.view === 'course' && !route.courseSlug) {
+    return { view: 'landing', courseSlug: null };
   }
   return route;
 };
@@ -30,19 +30,22 @@ const parseRouteFromLocation = (): RouteState => {
   const segments = path.split('/').filter(Boolean);
 
   if (segments[0] === 'profile') {
-    return { view: 'profile', courseId: null };
+    return { view: 'profile', courseSlug: null };
   }
 
   if (segments[0] === 'courses') {
-    return { view: 'course', courseId: segments[1] ?? null };
+    const slug = segments[1] ? decodeURIComponent(segments[1]) : null;
+    return { view: 'course', courseSlug: slug };
   }
 
-  return { view: 'landing', courseId: null };
+  return { view: 'landing', courseSlug: null };
 };
 
 const routeToPath = (route: RouteState): string => {
   if (route.view === 'profile') return '/profile';
-  if (route.view === 'course' && route.courseId) return `/courses/${route.courseId}`;
+  if (route.view === 'course' && route.courseSlug) {
+    return `/courses/${encodeURIComponent(route.courseSlug)}`;
+  }
   return '/';
 };
 
@@ -64,7 +67,8 @@ const App: React.FC = () => {
   const [currentView, setCurrentView] = useState<View>(
     initialRoute.view === 'course' ? 'landing' : initialRoute.view,
   );
-  const [selectedCourseId, setSelectedCourseId] = useState<string | null>(initialRoute.courseId);
+  const [selectedCourseId, setSelectedCourseId] = useState<string | null>(null);
+  const [pendingCourseSlug, setPendingCourseSlug] = useState<string | null>(initialRoute.courseSlug);
   const isAuthCallbackPath =
     locationPath === '/auth/callback' || locationPath.startsWith('/auth/callback/');
   
@@ -92,19 +96,33 @@ const App: React.FC = () => {
   const navigateToLanding = () => {
     setSelectedCourseId(null);
     setCurrentView('landing');
-    syncRoute({ view: 'landing', courseId: null });
+    setPendingCourseSlug(null);
+    syncRoute({ view: 'landing', courseSlug: null });
   };
 
   const navigateToProfile = () => {
     setSelectedCourseId(null);
     setCurrentView('profile');
-    syncRoute({ view: 'profile', courseId: null });
+    setPendingCourseSlug(null);
+    syncRoute({ view: 'profile', courseSlug: null });
   };
 
   const handleOpenAuth = (mode: 'login' | 'register') => {
     setAuthMode(mode);
     setAuthModalOpen(true);
   };
+
+  const resolveCourseBySlug = useCallback(
+    (slug: string | null) => {
+      if (!slug) return null;
+      return courses.find((c) => c.slug === slug || c.id === slug) ?? null;
+    },
+    [courses],
+  );
+
+  useEffect(() => {
+    progressFetchKeyRef.current = null;
+  }, [user?.id]);
 
   useEffect(() => {
     progressFetchKeyRef.current = null;
@@ -131,7 +149,7 @@ const App: React.FC = () => {
       setLocationPath(window.location.pathname);
       const parsed = normalizeRoute(parseRouteFromLocation());
       setRoute(parsed);
-      setSelectedCourseId(parsed.courseId);
+      setPendingCourseSlug(parsed.courseSlug);
     };
 
     const originalPushState = window.history.pushState;
@@ -233,9 +251,12 @@ const App: React.FC = () => {
     }
 
     if (route.view === 'course') {
-      if (route.courseId && user) {
-        void handleSelectCourse(route.courseId, { skipPathUpdate: true });
-      } else if (route.courseId && hasFetchedProfile && !user) {
+      if (pendingCourseSlug && user) {
+        const course = resolveCourseBySlug(pendingCourseSlug);
+        if (course) {
+          void handleSelectCourse(course.id, { skipPathUpdate: true });
+        }
+      } else if (pendingCourseSlug && hasFetchedProfile && !user) {
         navigateToLanding();
       }
       return;
@@ -243,7 +264,7 @@ const App: React.FC = () => {
 
     setCurrentView('landing');
     setSelectedCourseId(null);
-  }, [route, user, hasFetchedProfile, bootstrapping, courses]);
+  }, [route, pendingCourseSlug, user, hasFetchedProfile, bootstrapping, courses, resolveCourseBySlug]);
 
   useEffect(() => {
     if (isAuthCallbackPath) return;
@@ -257,6 +278,7 @@ const App: React.FC = () => {
     setUser(authedUser);
     setHasFetchedProfile(true);
     setAuthModalOpen(false);
+    navigateToProfile();
   };
 
   const handleLogout = async () => {
@@ -324,8 +346,10 @@ const App: React.FC = () => {
 
     setSelectedCourseId(courseId);
     setCurrentView('course');
+    const slug = course.slug ?? courseId;
+    setPendingCourseSlug(slug);
     if (!options?.skipPathUpdate) {
-      syncRoute({ view: 'course', courseId });
+      syncRoute({ view: 'course', courseSlug: slug });
     }
   };
 
@@ -350,6 +374,7 @@ const App: React.FC = () => {
         onAuthenticated={(authedUser) => {
           setUser(authedUser);
           setHasFetchedProfile(true);
+          navigateToProfile();
         }}
       />
     );
