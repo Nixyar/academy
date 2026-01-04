@@ -5,6 +5,7 @@ export type CourseProgressPatch =
   | { op: 'quiz_answer'; lessonId: string; quizId: string; answer: unknown }
   | { op: 'lesson_status'; lessonId: string; status: LessonStatus; completedAt?: string | null }
   | { op: 'set_resume'; lessonId: string }
+  | { op: 'lesson_prompt'; lessonId: string; prompt: string }
   | { op: 'touch_lesson'; lessonId: string };
 
 type ProgressEnvelope = { course_id?: string; progress?: CourseProgress };
