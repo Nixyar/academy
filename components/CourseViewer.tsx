@@ -29,6 +29,14 @@ interface CourseViewerProps {
   onProgressChange?: (courseId: string, progress: CourseProgress) => void;
 }
 
+// BOLT ⚡: This function is pure and does not depend on component state.
+// By defining it outside the component, we prevent it from being re-created on every render,
+// which is a micro-optimization that reduces memory allocation and garbage collection pressure.
+const getValueByPath = (source: unknown, path: string): unknown => {
+  if (!path) return undefined;
+  return path.split('.').reduce((acc: any, key) => (acc && typeof acc === 'object' ? acc[key] : undefined), source);
+};
+
 export const CourseViewer: React.FC<CourseViewerProps> = ({
   course,
   onBack,
@@ -118,11 +126,6 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     [course.id, syncProgress],
   );
 
-  const getValueByPath = useCallback((source: unknown, path: string): unknown => {
-    if (!path) return undefined;
-    return path.split('.').reduce((acc: any, key) => (acc && typeof acc === 'object' ? acc[key] : undefined), source);
-  }, []);
-
   const isNonEmpty = (value: unknown) => {
     if (value === null || value === undefined) return false;
     if (typeof value === 'string') return value.trim().length > 0;
@@ -168,7 +171,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
           return true;
       }
     },
-    [getValueByPath],
+    [],
   );
 
   const unlockedLessonIds = useMemo(() => {
