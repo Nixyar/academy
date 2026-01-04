@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Course, CourseProgress, LessonType } from '../types';
 import { ImageAnalyzer } from './ImageAnalyzer';
 import { ImageEditor } from './ImageEditor';
-import { FileText, Menu, X, ChevronLeft, ChevronRight, Send } from 'lucide-react';
+import { FileText, Menu, X, ChevronLeft, ChevronRight, Send, Info } from 'lucide-react';
 import { fetchCourseProgress, fetchCourseResume, patchCourseProgress } from '../services/progressApi';
 import { apiFetch } from '../services/apiClient';
 
@@ -51,6 +51,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [quizAnswer, setQuizAnswer] = useState<number | null>(null);
   const [copiedExample, setCopiedExample] = useState<number | null>(null);
+  const [copiedPromptBlock, setCopiedPromptBlock] = useState<number | null>(null);
   const [courseProgress, setCourseProgress] = useState<CourseProgress>(initialProgress ?? {});
   const [progressLoading, setProgressLoading] = useState(false);
   const [promptInput, setPromptInput] = useState('');
@@ -89,7 +90,20 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     (courseProgress as any)?.active_job_prompt ??
     (rawActiveJob && typeof rawActiveJob === 'object' ? (rawActiveJob as any).prompt : null);
   const activeJobPrompt = typeof rawActiveJobPrompt === 'string' ? rawActiveJobPrompt : '';
+  const rawActiveJobLessonId =
+    typeof (courseProgress as any)?.active_job_lesson_id === 'string'
+      ? (courseProgress as any).active_job_lesson_id
+      : rawActiveJob && typeof rawActiveJob === 'object'
+        ? (typeof (rawActiveJob as any).lessonId === 'string'
+            ? (rawActiveJob as any).lessonId
+            : typeof (rawActiveJob as any).lesson_id === 'string'
+              ? (rawActiveJob as any).lesson_id
+              : null)
+        : null;
+  const activeJobLessonId = typeof rawActiveJobLessonId === 'string' ? rawActiveJobLessonId : null;
   const isPromptLocked = Boolean(activeJobStatus);
+  const isActiveJobForLesson = activeJobLessonId ? activeJobLessonId === activeLesson.id : false;
+  const isPromptLockedForLesson = isPromptLocked && isActiveJobForLesson;
   const savedResultHtml =
     typeof (courseProgress as any)?.result?.html === 'string'
       ? ((courseProgress as any).result as any).html
@@ -174,6 +188,40 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     [],
   );
 
+  const resolveUnlockPlaceholders = useCallback(
+    (rule: any): any => {
+      const substituteValue = (value: unknown) => {
+        if (typeof value !== 'string') return value;
+        const normalized = value.trim();
+        const stripSigils = normalized
+          .replace(/^\$\{?/, '')
+          .replace(/\}?$/, '');
+        const map: Record<string, string> = {
+          lessonId: activeLesson.id,
+          'lesson.id': activeLesson.id,
+          currentLessonId: activeLesson.id,
+          lesson_id: activeLesson.id,
+        };
+        return map[normalized] ?? map[stripSigils] ?? normalized;
+      };
+
+      if (Array.isArray(rule)) {
+        return rule.map((item) => resolveUnlockPlaceholders(item));
+      }
+
+      if (rule && typeof rule === 'object') {
+        const next: any = { ...rule };
+        if (next.allOf) next.allOf = resolveUnlockPlaceholders(next.allOf);
+        if (next.anyOf) next.anyOf = resolveUnlockPlaceholders(next.anyOf);
+        if ('value' in next) next.value = substituteValue(next.value);
+        return next;
+      }
+
+      return rule;
+    },
+    [activeLesson.id],
+  );
+
   const unlockedLessonIds = useMemo(() => {
     const unlocked = new Set<string>();
     unlocked.add(activeLesson.id);
@@ -243,26 +291,12 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     };
   }, [applyProgressPatch, course.id, course.lessons, syncProgress]);
 
-  const heroSubtitle = useMemo(() => {
-    const { blocks } = activeLesson;
-    if (!blocks) return null;
-    if (Array.isArray(blocks)) {
-      const hero = blocks.find(
-        (block) => block && typeof block === 'object' && (block as any).type === 'hero',
-      );
-      if (hero && typeof (hero as any).subtitle === 'string') {
-        return (hero as any).subtitle as string;
-      }
-    }
-    if (blocks && typeof blocks === 'object' && (blocks as any).type === 'hero') {
-      const subtitle = (blocks as any).subtitle;
-      if (typeof subtitle === 'string') return subtitle;
-    }
-    return null;
-  }, [activeLesson]);
-
   const isWorkshopLesson = useMemo(
     () => (activeLesson.lessonType ?? '').toLowerCase() === 'workshop',
+    [activeLesson.lessonType],
+  );
+  const isLectureLesson = useMemo(
+    () => (activeLesson.lessonType ?? '').toLowerCase() === 'lecture',
     [activeLesson.lessonType],
   );
 
@@ -271,7 +305,110 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     [activeLesson.id, courseProgress?.lessons],
   );
 
+  const gateContext = useMemo(
+    () => ({
+      ...(courseProgress ?? {}),
+      lesson: activeLessonProgress ?? {},
+      lessons: courseProgress?.lessons ?? {},
+    }),
+    [activeLessonProgress, courseProgress],
+  );
+
+  const evaluateGate = useCallback(
+    (gate: any): boolean => {
+      if (!gate) return true;
+      if (gate && typeof gate === 'object' && Object.keys(gate).length === 0) return true;
+
+      // Если урок уже завершён — не блокируем последующие блоки.
+      if ((activeLessonProgress as any)?.status === 'completed') return true;
+
+      // Нормализуем строковый gate (часто приходит как JSON-строка).
+      let normalizedGate = gate;
+      if (typeof gate === 'string') {
+        try {
+          normalizedGate = JSON.parse(gate);
+        } catch {
+          normalizedGate = gate;
+        }
+      }
+
+      if (normalizedGate && typeof normalizedGate === 'object' && typeof (normalizedGate as any).op === 'string') {
+        const resolvedGate = resolveUnlockPlaceholders(normalizedGate);
+        return evaluateUnlockRule(resolvedGate, gateContext);
+      }
+
+      if (normalizedGate && typeof normalizedGate === 'object' && 'path' in normalizedGate) {
+        const path = typeof (normalizedGate as any).path === 'string' ? (normalizedGate as any).path : '';
+        const value =
+          (normalizedGate as any).equals !== undefined
+            ? (normalizedGate as any).equals
+              : (normalizedGate as any).value !== undefined
+                ? (normalizedGate as any).value
+                : (normalizedGate as any).expected;
+        if (!path) return true;
+        const resolvedGate = resolveUnlockPlaceholders({ op: 'equals', path, value });
+        return evaluateUnlockRule(resolvedGate, gateContext);
+      }
+
+      const resolvedGate = resolveUnlockPlaceholders(normalizedGate);
+      return evaluateUnlockRule(resolvedGate, gateContext);
+    },
+    [activeLessonProgress, evaluateUnlockRule, gateContext, resolveUnlockPlaceholders],
+  );
+
+  const visibleBlocks = useMemo(() => {
+    const { blocks } = activeLesson;
+    if (!blocks) return [];
+    const list = Array.isArray(blocks) ? blocks : [blocks];
+    const result: unknown[] = [];
+    let gatePassed = true;
+
+    for (const block of list) {
+      if (block && typeof block === 'object' && (block as any).gate) {
+        const gate = (block as any).gate;
+        gatePassed = evaluateGate(gate);
+        if (!gatePassed) continue;
+      }
+
+      if (gatePassed) {
+        result.push(block);
+      }
+    }
+
+    return result;
+  }, [activeLesson, evaluateGate]);
+
+  const heroSubtitle = useMemo(() => {
+    const hero = visibleBlocks.find(
+      (block) => block && typeof block === 'object' && (block as any).type === 'hero',
+    );
+    if (hero && typeof (hero as any).subtitle === 'string') {
+      return (hero as any).subtitle as string;
+    }
+    return null;
+  }, [visibleBlocks]);
+
+  const savedPrompt = useMemo(() => {
+    const fromLesson =
+      activeLessonProgress && typeof (activeLessonProgress as any).prompt === 'string'
+        ? (activeLessonProgress as any).prompt
+        : activeLessonProgress && typeof (activeLessonProgress as any).lesson_prompt === 'string'
+          ? (activeLessonProgress as any).lesson_prompt
+          : null;
+
+    const pick = (value: unknown) => {
+      if (typeof value !== 'string') return null;
+      const trimmed = value.trim();
+      return trimmed.length ? trimmed : null;
+    };
+
+    return pick(fromLesson);
+  }, [activeLessonProgress]);
+
+  const isPromptReadOnly = Boolean(savedPrompt);
+
   const isCtaUnlocked = useMemo(() => {
+    if ((activeLessonProgress as any)?.status === 'completed') return true;
     const unlockRuleRaw = (activeLesson as any)?.unlock_rule;
     let unlockRule: any = unlockRuleRaw;
     if (typeof unlockRuleRaw === 'string') {
@@ -283,11 +420,13 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     }
 
     if (!unlockRule) return true;
-    return evaluateUnlockRule(unlockRule, activeLessonProgress);
-  }, [activeLesson, activeLessonProgress, evaluateUnlockRule]);
+    const resolvedRule = resolveUnlockPlaceholders(unlockRule);
+    // Evaluate against the full gate context, not just lesson progress, so rules that
+    // reference course-level fields (e.g. active_job.*) work.
+    return evaluateUnlockRule(resolvedRule, gateContext);
+  }, [activeLesson, activeLessonProgress, evaluateUnlockRule, gateContext, resolveUnlockPlaceholders]);
 
   const quizBlock = useMemo(() => {
-    const { blocks } = activeLesson;
     const extract = (block: unknown) => {
       if (block && typeof block === 'object' && (block as any).type === 'quiz') {
         const quizId =
@@ -309,17 +448,12 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
       return null;
     };
 
-    if (Array.isArray(blocks)) {
-      for (const block of blocks) {
-        const value = extract(block);
-        if (value) return value;
-      }
-    } else {
-      const value = extract(blocks);
+    for (const block of visibleBlocks) {
+      const value = extract(block);
       if (value) return value;
     }
     return null;
-  }, [activeLesson]);
+  }, [visibleBlocks]);
 
   useEffect(() => {
     if (!quizBlock?.options) {
@@ -358,7 +492,8 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
       streamingJobIdRef.current === activeJobId;
     const hasSavedHtml = Boolean(savedResultHtml && savedResultHtml.trim());
 
-    setPromptInput(isPromptLocked ? activeJobPrompt : '');
+    const initialPrompt = savedPrompt ?? (isPromptLockedForLesson ? activeJobPrompt : '');
+    setPromptInput(initialPrompt);
     if (keepStreamAlive) {
       // Keep spinner while we continue streaming the same job
       setIsSendingPrompt(true);
@@ -385,14 +520,15 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     activeJobPrompt,
     activeJobStatus,
     activeLesson.id,
-    isPromptLocked,
+    savedPrompt,
+    isPromptLockedForLesson,
     savedResultHtml,
   ]);
 
   useEffect(() => {
-    if (!isPromptLocked) return;
+    if (!isPromptLockedForLesson || isPromptReadOnly) return;
     setPromptInput(activeJobPrompt);
-  }, [activeJobPrompt, isPromptLocked]);
+  }, [activeJobPrompt, isPromptLockedForLesson, isPromptReadOnly]);
 
   useEffect(() => {
     if (!hasCompletedJob) return;
@@ -437,7 +573,6 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
   }, [llmOutline]);
 
   const examplesBlock = useMemo(() => {
-    const { blocks } = activeLesson;
     const extract = (block: unknown) => {
       if (block && typeof block === 'object' && (block as any).type === 'examples') {
         const title = typeof (block as any).title === 'string' ? (block as any).title : null;
@@ -464,17 +599,12 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
       return null;
     };
 
-    if (Array.isArray(blocks)) {
-      for (const block of blocks) {
-        const value = extract(block);
-        if (value) return value;
-      }
-    } else {
-      const value = extract(blocks);
+    for (const block of visibleBlocks) {
+      const value = extract(block);
       if (value) return value;
     }
     return null;
-  }, [activeLesson]);
+  }, [visibleBlocks]);
 
   const handleCopyExample = async (text: string | null, idx: number) => {
     if (!text) return;
@@ -486,6 +616,20 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
       // ignore clipboard errors
     }
   };
+
+  const handleCopyPrompt = useCallback(async (text: string | null, idx: number) => {
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedPromptBlock(idx);
+      setTimeout(
+        () => setCopiedPromptBlock((current) => (current === idx ? null : current)),
+        1500,
+      );
+    } catch {
+      // ignore clipboard errors
+    }
+  }, []);
 
   const handleQuizSelect = useCallback(
     async (optionIndex: number, optionValue: string | null) => {
@@ -926,7 +1070,7 @@ ${withHead}
 
   const handlePromptSubmit = useCallback(async () => {
     const prompt = promptInput.trim();
-    if (!prompt || isSendingPrompt || !isWorkshopLesson || isPromptLocked) return;
+    if (!prompt || isSendingPrompt || isPromptReadOnly) return;
 
     cleanupStream();
     setIsSendingPrompt(true);
@@ -942,6 +1086,12 @@ ${withHead}
     llmOutlineRef.current = null;
 
     try {
+      await applyProgressPatch({
+        op: 'lesson_prompt',
+        lessonId: activeLesson.id,
+        prompt,
+      });
+
       const response = await apiFetch<{ jobId?: string; outline?: unknown }>(
         '/api/v1/html/start',
         {
@@ -971,11 +1121,11 @@ ${withHead}
     }
   }, [
     activeLesson.id,
+    applyProgressPatch,
     cleanupStream,
     course.id,
+    isPromptReadOnly,
     isSendingPrompt,
-    isWorkshopLesson,
-    isPromptLocked,
     promptInput,
     startHtmlStream,
     syncProgress,
@@ -1034,7 +1184,6 @@ ${withHead}
   }, [activeJobStatus, savedResultHtml]);
 
   const ctaData = useMemo(() => {
-    const { blocks } = activeLesson;
     const extract = (block: unknown) => {
       if (block && typeof block === 'object' && (block as any).type === 'cta') {
         const buttonText = typeof (block as any).buttonText === 'string' ? (block as any).buttonText : null;
@@ -1046,17 +1195,47 @@ ${withHead}
       return null;
     };
 
-    if (Array.isArray(blocks)) {
-      for (const block of blocks) {
-        const value = extract(block);
-        if (value) return value;
-      }
-    } else {
-      const value = extract(blocks);
+    for (const block of visibleBlocks) {
+      const value = extract(block);
       if (value) return value;
     }
     return { buttonText: null, action: null };
-  }, [activeLesson]);
+  }, [visibleBlocks]);
+
+  type LessonBlockItem = { key: string; content: string; prompt: string; blockType: string | null };
+
+  const blockItems = useMemo<LessonBlockItem[]>(() => {
+    if (!visibleBlocks.length) {
+      return [
+        {
+          key: 'fallback-description',
+          content: typeof activeLesson.description === 'string' ? activeLesson.description : '',
+          prompt: '',
+          blockType: null,
+        },
+      ] as LessonBlockItem[];
+    }
+
+    return visibleBlocks
+      .map((block, idx) => {
+        const key = typeof (block as any)?.id === 'string' ? (block as any).id : `block-${idx}`;
+        const blockType = typeof (block as any)?.type === 'string' ? (block as any).type : null;
+        const content =
+          typeof block === 'string'
+            ? block
+            : block && typeof block === 'object' && typeof (block as any).content === 'string'
+              ? (block as any).content
+              : '';
+        const prompt =
+          block && typeof block === 'object' && typeof (block as any).prompt === 'string'
+            ? (block as any).prompt.trim()
+            : '';
+
+        if (!content && !prompt) return null;
+        return { key, content, prompt, blockType };
+      })
+      .filter(Boolean) as LessonBlockItem[];
+  }, [activeLesson.description, visibleBlocks]);
 
   // Render the Right Side Content based on Lesson Type
   const renderRightPanel = () => {
@@ -1113,19 +1292,19 @@ ${withHead}
               )}
               <div className="relative flex-1 mt-1">
                 <textarea
-                  disabled={!isWorkshopLesson || isPromptLocked}
+                  disabled={isPromptReadOnly}
                   value={promptInput}
                   onChange={(e) => setPromptInput(e.target.value)}
                   className={`w-full h-full bg-transparent text-sm resize-none font-mono focus:outline-none pr-28 ${
                     isWorkshopLesson ? 'text-slate-200' : 'text-slate-500'
                   }`}
-                  placeholder="// Console ready..."
+                  placeholder={isLectureLesson ? '' : 'Console ready...'}
                 />
                 {isWorkshopLesson && promptInput.trim().length > 0 && (
                   <button
                     type="button"
                     onClick={handlePromptSubmit}
-                    disabled={isSendingPrompt || isPromptLocked}
+                    disabled={isSendingPrompt || isPromptReadOnly}
                     className="absolute bottom-3 right-3 px-3 py-1.5 rounded-lg bg-vibe-600 text-white text-xs font-semibold flex items-center gap-2 shadow-lg shadow-vibe-900/30 hover:bg-vibe-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                     style={{ cursor: 'pointer' }}
                   >
@@ -1223,10 +1402,55 @@ ${withHead}
                              )}
                         </div>
 
-                        <div className="prose prose-invert prose-lg prose-headings:font-display prose-p:text-slate-400 prose-strong:text-white max-w-none">
-                            <p className="whitespace-pre-line leading-relaxed">
-                                {activeLesson.description}
-                            </p>
+                        <div className="prose prose-invert prose-lg prose-headings:font-display prose-p:text-slate-400 prose-strong:text-white max-w-none space-y-6">
+                          {blockItems.map((block, idx) =>
+                            block.blockType === 'tip' ? (
+                              <div key={block.key} className="not-prose space-y-2">
+                                <p className="text-[11px] uppercase tracking-[0.32em] text-slate-400 font-semibold">
+                                  Практические советы
+                                </p>
+                                <div className="relative overflow-hidden rounded-2xl border border-emerald-400/35 bg-gradient-to-br from-[#0c1613] via-[#0a1413] to-[#081012] shadow-lg shadow-emerald-900/30">
+                                  <div
+                                    className="absolute inset-0 pointer-events-none opacity-40"
+                                    style={{
+                                      background:
+                                        'radial-gradient(circle at 20% 30%, rgba(16,185,129,0.14), transparent 45%), radial-gradient(circle at 85% 20%, rgba(16,185,129,0.18), transparent 40%)',
+                                    }}
+                                    aria-hidden
+                                  />
+                                  <div className="relative flex items-start gap-3 p-4 md:p-5">
+                                    <div className="mt-0.5 flex h-7 w-7 items-center justify-center rounded-full border border-emerald-500/50 bg-emerald-500/5 text-emerald-400">
+                                      <Info className="h-3.5 w-3.5" />
+                                    </div>
+                                    <p className="text-[16px] md:text-[17px] text-emerald-50 whitespace-pre-line leading-[1.35] font-medium">
+                                      {block.content}
+                                    </p>
+                                  </div>
+                                </div>
+                              </div>
+                            ) : (
+                              <div key={block.key} className="space-y-3">
+                                {block.content && (
+                                  <p className="whitespace-pre-line leading-relaxed">{block.content}</p>
+                                )}
+                                {block.prompt && (
+                                  <div className="relative p-4 md:p-5 rounded-xl bg-[#0b1020] border border-vibe-500/30">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleCopyPrompt(block.prompt, idx)}
+                                      className="absolute -top-3 right-4 text-[9px] md:text-[10px] uppercase tracking-wide px-2.5 py-1.5 rounded-md border border-white/15 text-slate-200 bg-white/5 backdrop-blur-sm hover:bg-white/10 hover:border-vibe-400/40 hover:text-white transition-colors shadow-lg shadow-black/30"
+                                      style={{ cursor: 'pointer' }}
+                                    >
+                                      {copiedPromptBlock === idx ? 'Скопировано' : 'Скопировать'}
+                                    </button>
+                                    <p className="text-xs md:text-sm text-white whitespace-pre-line leading-relaxed">
+                                      {block.prompt}
+                                    </p>
+                                  </div>
+                                )}
+                              </div>
+                            )
+                          )}
                         </div>
 
                         {examplesBlock && (

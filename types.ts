@@ -17,6 +17,7 @@ export interface LessonProgress {
   status?: LessonStatus;
   completed_at?: string | null;
   quiz_answers?: Record<string, unknown>;
+  prompt?: string | null;
 }
 
 export interface CourseProgress {
