@@ -6,7 +6,11 @@ export type CourseProgressPatch =
   | { op: 'lesson_status'; lessonId: string; status: LessonStatus; completedAt?: string | null }
   | { op: 'set_resume'; lessonId: string }
   | { op: 'lesson_prompt'; lessonId: string; prompt: string }
-  | { op: 'touch_lesson'; lessonId: string };
+  | { op: 'touch_lesson'; lessonId: string }
+  // HTML workspace navigation (multi-page preview)
+  | { op: 'set_active_file'; lessonId: string; active_file: string; file?: string }
+  // Allow backend to introduce new patch ops without breaking the frontend build.
+  | { op: string; [key: string]: unknown };
 
 type ProgressEnvelope = { course_id?: string; progress?: CourseProgress };
 type ProgressMapResponse = { progress?: Record<string, CourseProgress | undefined> };

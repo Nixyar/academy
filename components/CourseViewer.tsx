@@ -4,7 +4,7 @@ import { ImageAnalyzer } from './ImageAnalyzer';
 import { ImageEditor } from './ImageEditor';
 import { FileText, Menu, X, ChevronLeft, ChevronRight, Send, Info } from 'lucide-react';
 import { fetchCourseProgress, fetchCourseResume, patchCourseProgress } from '../services/progressApi';
-import { apiFetch } from '../services/apiClient';
+import { ApiError, apiFetch } from '../services/apiClient';
 
 const IFRAME_BASE_STYLES = `
   :root { color-scheme: dark; }
@@ -20,6 +20,181 @@ const IFRAME_BASE_STYLES = `
   a { color: #7dd3fc; }
   img { max-width: 100%; display: block; }
 `;
+
+type Workspace = {
+  files: Record<string, string>;
+  activeFile: string;
+  source: 'files' | 'html' | 'empty';
+};
+
+// A) Normalize workspace coming from backend (or legacy html-only progress).
+function getWorkspace(progress: any): Workspace {
+  const result = progress?.result;
+
+  if (result?.files && typeof result.files === 'object' && !Array.isArray(result.files)) {
+    const files: Record<string, string> = {};
+    Object.entries(result.files as Record<string, unknown>).forEach(([key, value]) => {
+      if (typeof value === 'string') files[key] = value;
+    });
+
+    const desiredActive = typeof result.active_file === 'string' ? (result.active_file as string) : 'index.html';
+    const hasIndex = Object.prototype.hasOwnProperty.call(files, 'index.html');
+    const fallbackActive = hasIndex ? 'index.html' : Object.keys(files)[0] ?? 'index.html';
+    const hasDesired = Object.prototype.hasOwnProperty.call(files, desiredActive);
+    const activeFile = hasDesired ? desiredActive : fallbackActive;
+
+    return {
+      files: Object.keys(files).length > 0 ? files : { 'index.html': '' },
+      activeFile,
+      source: 'files',
+    };
+  }
+
+  if (typeof result?.html === 'string') {
+    return { files: { 'index.html': result.html as string }, activeFile: 'index.html', source: 'html' };
+  }
+
+  if (typeof progress?.result_html === 'string') {
+    return { files: { 'index.html': progress.result_html as string }, activeFile: 'index.html', source: 'html' };
+  }
+
+  return { files: { 'index.html': '' }, activeFile: 'index.html', source: 'empty' };
+}
+
+function decorateHtmlForPreview(rawHtml: string, extraCss: string | null): string {
+  const raw = String(rawHtml ?? '').trim();
+  const stylePieces = [IFRAME_BASE_STYLES];
+  if (extraCss && extraCss.trim() && !raw.includes(extraCss)) stylePieces.push(extraCss);
+  const styleTag = `<style>${stylePieces.join('\n')}</style>`;
+  const tailwindScriptTag = `<script src="https://cdn.tailwindcss.com"></script>`;
+  const headInjection = `${tailwindScriptTag}${styleTag}`;
+
+  const ensureHead = (html: string) => {
+    if (/<head[^>]*>/i.test(html)) {
+      return html.replace(/<head[^>]*>/i, (match) => `${match}${headInjection}`);
+    }
+    if (/<html[^>]*>/i.test(html)) {
+      return html.replace(/<html[^>]*>/i, (match) => `${match}<head>${headInjection}</head>`);
+    }
+    return `${headInjection}\n${html}`;
+  };
+
+  if (!raw) {
+    return `<!doctype html>
+<html>
+<head>${styleTag}</head>
+<body></body>
+</html>`;
+  }
+
+  const withHead = ensureHead(raw);
+  const hasBodyTag = /<body[^>]*>/i.test(withHead);
+  if (hasBodyTag) return `<!doctype html>\n${withHead}`;
+
+  return `<!doctype html>
+<html>
+<head>${styleTag}</head>
+<body>
+${withHead}
+</body>
+</html>`;
+}
+
+function normalizeFileHref(href: string): string {
+  const trimmed = String(href ?? '').trim();
+  return trimmed.replace(/^\.?\//, '').split('?')[0].split('#')[0];
+}
+
+// E) Iframe navigation: intercept <a href="*.html"> and ask parent to switch active_file.
+function injectIframeRouter(html: string): string {
+  const script = `<script>
+(function () {
+  try {
+    if (window.__VIBE_IFRAME_ROUTER_INSTALLED) return;
+    window.__VIBE_IFRAME_ROUTER_INSTALLED = true;
+  } catch {}
+
+  document.addEventListener('click', function (event) {
+    var target = event && event.target;
+    if (!target || !target.closest) return;
+    var link = target.closest('a');
+    if (!link) return;
+    var href = (link.getAttribute('href') || '').trim();
+    if (!href) return;
+    if (href.charAt(0) === '#') return;
+    if (/^(mailto:|tel:)/i.test(href)) return;
+    if (/^javascript:/i.test(href)) { event.preventDefault(); return; }
+
+    var isHtml = /\\.html(\\?|#|$)/i.test(href);
+    if (isHtml) {
+      var file = href.replace(/^\\.\\//, '').split('?')[0].split('#')[0];
+      if (!file) return;
+      event.preventDefault();
+      try { window.parent.postMessage({ type: 'NAVIGATE_FILE', file: file }, '*'); } catch {}
+      return;
+    }
+
+    // Prevent the preview iframe from navigating away (e.g. to app routes like /courses/...).
+    event.preventDefault();
+    try { window.open(href, '_blank', 'noopener,noreferrer'); } catch {}
+  }, true);
+})();
+</script>`;
+
+  if (/<\/body\s*>/i.test(html)) {
+    return html.replace(/<\/body\s*>/i, `${script}</body>`);
+  }
+  return `${html}\n${script}`;
+}
+
+function extractCtaData(blocks: unknown[]): { buttonText: string | null } {
+  const extract = (block: unknown) => {
+    if (block && typeof block === 'object' && (block as any).type === 'cta') {
+      const buttonText = typeof (block as any).buttonText === 'string' ? ((block as any).buttonText as string) : null;
+      if (buttonText) return { buttonText };
+    }
+    return null;
+  };
+
+  for (const block of blocks) {
+    const value = extract(block);
+    if (value) return value;
+  }
+
+  return { buttonText: null };
+}
+
+function describeApiError(error: unknown, fallback: string): string {
+  if (error instanceof ApiError) {
+    const body = error.body as any;
+    const fromBody = body?.error || body?.message;
+    return typeof fromBody === 'string' && fromBody.trim() ? fromBody : fallback;
+  }
+  if (error instanceof Error) return error.message || fallback;
+  return fallback;
+}
+
+function getLessonMode(lesson: any): 'edit' | 'add_page' | 'create' {
+  const rawSettings = lesson?.settings;
+  let settings: any = rawSettings;
+  if (typeof rawSettings === 'string') {
+    try {
+      settings = JSON.parse(rawSettings);
+    } catch {
+      settings = null;
+    }
+  }
+
+  const modeRaw =
+    (settings && typeof settings === 'object' && typeof settings.mode === 'string' ? settings.mode : null) ??
+    (typeof lesson?.mode === 'string' ? lesson.mode : null) ??
+    (typeof lesson?.settings_mode === 'string' ? lesson.settings_mode : null);
+
+  const normalized = typeof modeRaw === 'string' ? modeRaw.trim().toLowerCase() : '';
+  if (normalized === 'edit') return 'edit';
+  if (normalized === 'add_page' || normalized === 'add-page' || normalized === 'add page') return 'add_page';
+  return 'create';
+}
 
 interface CourseViewerProps {
   course: Course;
@@ -40,6 +215,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     (import.meta as any).env?.DEV === true ? '' : (import.meta as any).env?.VITE_API_BASE_URL ?? '';
   const [activeLessonIndex, setActiveLessonIndex] = useState(0);
   const activeLesson = course.lessons[activeLessonIndex];
+  const activeLessonMode = useMemo(() => getLessonMode(activeLesson), [activeLesson]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [quizAnswer, setQuizAnswer] = useState<number | null>(null);
   const [copiedExample, setCopiedExample] = useState<number | null>(null);
@@ -54,14 +230,17 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
   const [llmCss, setLlmCss] = useState<string | null>(null);
   const [llmSections, setLlmSections] = useState<Record<string, string>>({});
   const [llmSectionOrder, setLlmSectionOrder] = useState<string[]>([]);
+  const [llmStatusText, setLlmStatusText] = useState<string | null>(null);
   const llmCssRef = useRef<string | null>(null);
   const llmSectionsRef = useRef<Record<string, string>>({});
   const llmSectionOrderRef = useRef<string[]>([]);
   const llmOutlineRef = useRef<unknown>(null);
   const streamControllerRef = useRef<AbortController | null>(null);
   const streamingJobIdRef = useRef<string | null>(null);
+  const streamLastEventAtRef = useRef<number>(0);
   const lastLessonIdRef = useRef<string>(course.lessons[activeLessonIndex]?.id ?? '');
   const fetchedResultJobIdRef = useRef<string | null>(null);
+  const previewIframeRef = useRef<HTMLIFrameElement | null>(null);
   const rawActiveJob = (courseProgress as any)?.active_job;
   const rawActiveJobStatus =
     (courseProgress as any)?.active_job_status ??
@@ -104,6 +283,14 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
         : typeof (courseProgress as any)?.lessons?.[activeLesson.id]?.result?.html === 'string'
           ? ((courseProgress as any).lessons?.[activeLesson.id]?.result as any).html
           : '';
+  const hasStoredFilesResult = Boolean(
+    ((courseProgress as any)?.result?.files &&
+      typeof (courseProgress as any).result.files === 'object' &&
+      !Array.isArray((courseProgress as any).result.files)) ||
+      ((courseProgress as any)?.lessons?.[activeLesson.id]?.result?.files &&
+        typeof (courseProgress as any).lessons?.[activeLesson.id]?.result?.files === 'object' &&
+        !Array.isArray((courseProgress as any).lessons?.[activeLesson.id]?.result?.files)),
+  );
   const hasCompletedJob = activeJobStatus === 'done';
 
   const syncProgress = useCallback(
@@ -401,9 +588,6 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
 
     return pick(fromLesson);
   }, [activeLessonProgress]);
-
-  const isPromptReadOnly = Boolean(savedPrompt);
-
   const isCtaUnlocked = useMemo(() => {
     if ((activeLessonProgress as any)?.status === 'completed') return true;
     const unlockRuleRaw = (activeLesson as any)?.unlock_rule;
@@ -422,6 +606,8 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     // reference course-level fields (e.g. active_job.*) work.
     return evaluateUnlockRule(resolvedRule, gateContext);
   }, [activeLesson, activeLessonProgress, evaluateUnlockRule, gateContext, resolveUnlockPlaceholders]);
+
+  const ctaData = useMemo(() => extractCtaData(visibleBlocks), [visibleBlocks]);
 
   const quizBlock = useMemo(() => {
     const extract = (block: unknown) => {
@@ -482,12 +668,9 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
   useEffect(() => {
     const lessonChanged = activeLesson.id !== lastLessonIdRef.current;
     lastLessonIdRef.current = activeLesson.id;
-    const keepStreamAlive =
-      !lessonChanged &&
-      activeJobStatus === 'running' &&
-      activeJobId &&
-      streamingJobIdRef.current === activeJobId;
-    const hasSavedHtml = Boolean(savedResultHtml && savedResultHtml.trim());
+    const hasLiveStream = Boolean(streamControllerRef.current && streamingJobIdRef.current);
+    const keepStreamAlive = !lessonChanged && hasLiveStream && isActiveJobForLesson;
+    const hasSavedHtml = hasStoredFilesResult || Boolean(savedResultHtml && savedResultHtml.trim());
 
     const initialPrompt = savedPrompt ?? (isPromptLockedForLesson ? activeJobPrompt : '');
     setPromptInput(initialPrompt);
@@ -495,8 +678,8 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
       // Keep spinner while we continue streaming the same job
       setIsSendingPrompt(true);
     } else {
-      setIsSendingPrompt(activeJobStatus === 'running' && !hasSavedHtml);
-      setLlmHtml(hasSavedHtml ? savedResultHtml : null);
+      setIsSendingPrompt(activeJobStatus === 'running' && isActiveJobForLesson && !hasSavedHtml);
+      setLlmHtml(hasSavedHtml && !hasStoredFilesResult ? savedResultHtml : null);
       setLlmError(null);
       setLlmOutline(null);
       setLlmCss(null);
@@ -506,29 +689,40 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
       llmSectionsRef.current = {};
       llmSectionOrderRef.current = [];
       llmOutlineRef.current = null;
-      if (streamControllerRef.current) {
+      // Abort stream only when we are sure it's no longer relevant.
+      const shouldAbortStream =
+        lessonChanged ||
+        !isActiveJobForLesson ||
+        (activeJobStatus === 'running' &&
+          streamingJobIdRef.current &&
+          activeJobId &&
+          streamingJobIdRef.current !== activeJobId);
+      if (shouldAbortStream && streamControllerRef.current) {
         streamControllerRef.current.abort();
         streamControllerRef.current = null;
       }
-      streamingJobIdRef.current = keepStreamAlive ? streamingJobIdRef.current : null;
+      if (shouldAbortStream) streamingJobIdRef.current = null;
     }
   }, [
     activeJobId,
     activeJobPrompt,
     activeJobStatus,
     activeLesson.id,
+    isActiveJobForLesson,
     savedPrompt,
     isPromptLockedForLesson,
     savedResultHtml,
+    hasStoredFilesResult,
   ]);
 
   useEffect(() => {
-    if (!isPromptLockedForLesson || isPromptReadOnly) return;
+    if (!isPromptLockedForLesson) return;
     setPromptInput(activeJobPrompt);
-  }, [activeJobPrompt, isPromptLockedForLesson, isPromptReadOnly]);
+  }, [activeJobPrompt, isPromptLockedForLesson]);
 
   useEffect(() => {
     if (!hasCompletedJob) return;
+    if (hasStoredFilesResult) return;
     if (!savedResultHtml || typeof savedResultHtml !== 'string' || !savedResultHtml.trim()) return;
     setLlmHtml((current) => (current === savedResultHtml ? current : savedResultHtml));
     setLlmCss(null);
@@ -541,7 +735,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     llmOutlineRef.current = null;
     setIsSendingPrompt(false);
     setLlmError(null);
-  }, [hasCompletedJob, savedResultHtml]);
+  }, [hasCompletedJob, hasStoredFilesResult, savedResultHtml]);
 
   useEffect(
     () => () => {
@@ -753,43 +947,103 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     [buildHtml, llmCss, llmOutline, llmSections, llmSectionOrder],
   );
 
-  const iframeHtml = useMemo(() => {
+  const effectiveResultContainer = useMemo(() => {
+    const courseHasResult =
+      (courseProgress as any)?.result && typeof (courseProgress as any).result === 'object';
+    const courseHasWorkspace =
+      courseHasResult &&
+      (((courseProgress as any).result.files &&
+        typeof (courseProgress as any).result.files === 'object' &&
+        !Array.isArray((courseProgress as any).result.files)) ||
+        typeof (courseProgress as any).result.html === 'string');
+    if (courseHasWorkspace) return courseProgress;
+
+    const lessonResultOwner = (courseProgress as any)?.lessons?.[activeLesson.id];
+    const lessonHasResult =
+      lessonResultOwner &&
+      typeof lessonResultOwner === 'object' &&
+      (lessonResultOwner as any).result &&
+      typeof (lessonResultOwner as any).result === 'object';
+    return lessonHasResult ? lessonResultOwner : courseProgress;
+  }, [activeLesson.id, courseProgress]);
+
+  const storedWorkspace = useMemo(() => getWorkspace(effectiveResultContainer), [effectiveResultContainer]);
+
+  const liveSingleHtml = useMemo(() => {
     const raw = (llmHtml ?? liveHtmlFromParts ?? '').trim();
-    if (!raw) return null;
+    return raw.length > 0 ? raw : null;
+  }, [llmHtml, liveHtmlFromParts]);
 
-    const stylePieces = [IFRAME_BASE_STYLES];
-    if (llmCss && !raw.includes(llmCss)) {
-      stylePieces.push(llmCss);
-    }
-    const styleTag = `<style>${stylePieces.join('\n')}</style>`;
-    const tailwindScriptTag = `<script src="https://cdn.tailwindcss.com"></script>`;
-    const headInjection = `${tailwindScriptTag}${styleTag}`;
+  const previewWorkspace = useMemo<Workspace>(() => {
+    if (storedWorkspace.source === 'files') return storedWorkspace;
+    const html = liveSingleHtml ?? storedWorkspace.files['index.html'] ?? '';
+    return { files: { 'index.html': html }, activeFile: 'index.html', source: storedWorkspace.source };
+  }, [liveSingleHtml, storedWorkspace]);
 
-    const ensureHead = (html: string) => {
-      if (/<head[^>]*>/i.test(html)) {
-        return html.replace(/<head[^>]*>/i, (match) => `${match}${headInjection}`);
+  const previewExtraCss = storedWorkspace.source === 'files' ? null : (llmCss ?? null);
+
+  const [uiActiveFile, setUiActiveFile] = useState<string>('index.html');
+
+  useEffect(() => {
+    setUiActiveFile((current) => {
+      if (current && Object.prototype.hasOwnProperty.call(previewWorkspace.files, current)) return current;
+      return previewWorkspace.activeFile;
+    });
+  }, [activeLesson.id, previewWorkspace.activeFile, previewWorkspace.files]);
+
+  const hasRenderablePreview = useMemo(() => {
+    return Object.values(previewWorkspace.files).some((value) => typeof value === 'string' && value.trim().length > 0);
+  }, [previewWorkspace.files]);
+
+  const setActiveFileRemote = useCallback(
+    async (fileRaw: string) => {
+      const file = normalizeFileHref(fileRaw);
+      if (!file || !Object.prototype.hasOwnProperty.call(previewWorkspace.files, file)) return;
+      if (file === uiActiveFile) return;
+      setUiActiveFile(file);
+      try {
+        const response = await apiFetch<any>('/api/v1/progress/active-file', {
+          method: 'PATCH',
+          body: JSON.stringify({ courseId: course.id, file }),
+        });
+
+        if (response && typeof response === 'object' && typeof (response as any).error === 'string') {
+          throw new Error((response as any).error);
+        }
+
+        const nextProgressCandidate =
+          response && typeof response === 'object' && (response as any).progress && typeof (response as any).progress === 'object'
+            ? ((response as any).progress as CourseProgress)
+            : null;
+        const nextProgress = nextProgressCandidate ?? (await fetchCourseProgress(course.id));
+        syncProgress(nextProgress ?? {});
+      } catch (error) {
+        console.error('Failed to update active file', error);
+        setLlmError(describeApiError(error, 'Не удалось переключить страницу. Попробуйте ещё раз.'));
       }
-      if (/<html[^>]*>/i.test(html)) {
-        return html.replace(/<html[^>]*>/i, (match) => `${match}<head>${headInjection}</head>`);
-      }
-      return `${headInjection}\n${html}`;
+    },
+    [course.id, previewWorkspace.files, syncProgress, uiActiveFile],
+  );
+
+  const iframeSrcDoc = useMemo(() => {
+    const html = previewWorkspace.files[uiActiveFile] ?? '';
+    const decorated = decorateHtmlForPreview(html, previewExtraCss);
+    return injectIframeRouter(decorated);
+  }, [previewExtraCss, previewWorkspace.files, uiActiveFile]);
+
+  useEffect(() => {
+    const handler = (event: MessageEvent) => {
+      if (event.source !== previewIframeRef.current?.contentWindow) return;
+      const data = event.data;
+      if (!data || typeof data !== 'object') return;
+      if ((data as any).type !== 'NAVIGATE_FILE') return;
+      const file = typeof (data as any).file === 'string' ? ((data as any).file as string) : null;
+      if (!file) return;
+      void setActiveFileRemote(file);
     };
-
-    const withHead = ensureHead(raw);
-    const hasBodyTag = /<body[^>]*>/i.test(withHead);
-
-    if (hasBodyTag) {
-      return `<!doctype html>\n${withHead}`;
-    }
-
-    return `<!doctype html>
-<html>
-<head>${styleTag}</head>
-<body>
-${withHead}
-</body>
-</html>`;
-  }, [llmCss, llmHtml, liveHtmlFromParts]);
+    window.addEventListener('message', handler);
+    return () => window.removeEventListener('message', handler);
+  }, [setActiveFileRemote]);
 
   const cleanupStream = useCallback(() => {
     if (streamControllerRef.current) {
@@ -797,10 +1051,12 @@ ${withHead}
       streamControllerRef.current = null;
     }
     streamingJobIdRef.current = null;
+    streamLastEventAtRef.current = 0;
   }, []);
 
   const applyFinalPayload = useCallback(
-    (payload: any) => {
+    (payload: any, opts?: { final?: boolean }) => {
+      const isFinal = opts?.final ?? true;
       const payloadSections: Record<string, string> = {};
       if (payload?.sections && typeof payload.sections === 'object') {
         Object.entries(payload.sections as Record<string, string | unknown>).forEach(([key, value]) => {
@@ -868,14 +1124,17 @@ ${withHead}
             : null;
       if (errorMessage) setLlmError(errorMessage);
 
-      setIsSendingPrompt(false);
-      cleanupStream();
+      if (isFinal) {
+        setIsSendingPrompt(false);
+        cleanupStream();
+      }
     },
     [buildHtml, cleanupStream, extractKeysFromOutline, parseJsonSafe],
   );
 
   const handleStreamEvent = useCallback(
     (incomingEventName: string, data: string) => {
+      streamLastEventAtRef.current = Date.now();
       const payload = parseJsonSafe(data);
       const payloadType =
         payload && typeof payload === 'object' && typeof (payload as any).type === 'string'
@@ -893,6 +1152,17 @@ ${withHead}
         }
         return value;
       };
+
+      if (eventName === 'status') {
+        const message =
+          payload && typeof payload === 'object'
+            ? ((payload as any).message ?? (payload as any).content ?? (payload as any).status)
+            : null;
+        if (typeof message === 'string' && message.trim()) {
+          setLlmStatusText(message.trim());
+        }
+        return;
+      }
 
       if (eventName === 'css') {
         const cssValue =
@@ -954,7 +1224,7 @@ ${withHead}
               : payload && typeof (payload as any).content === 'string'
                 ? (payload as any).content
                 : extractHtml(data),
-        });
+        }, { final: false });
         return;
       }
 
@@ -966,7 +1236,8 @@ ${withHead}
           typeof (payload as any).content === 'string'
             ? { ...(payload as any), html: (payload as any).content }
             : payload ?? {};
-        applyFinalPayload(finalPayload);
+        applyFinalPayload(finalPayload, { final: true });
+        setLlmStatusText(null);
         return;
       }
 
@@ -988,13 +1259,14 @@ ${withHead}
               (payload as any)?.html && typeof (payload as any).html === 'string'
                 ? (payload as any).html
                 : extractHtml(data),
-          });
+          }, { final: true });
           return;
         }
 
         setLlmError(typeof message === 'string' ? message : String(message));
         setIsSendingPrompt(false);
         cleanupStream();
+        setLlmStatusText(null);
       }
     },
     [applyFinalPayload, buildHtml, cleanupStream, parseJsonSafe],
@@ -1003,6 +1275,7 @@ ${withHead}
   const startHtmlStream = useCallback(
     (jobId: string) => {
       streamingJobIdRef.current = jobId;
+      streamLastEventAtRef.current = Date.now();
       const controller = new AbortController();
       streamControllerRef.current = controller;
 
@@ -1032,6 +1305,7 @@ ${withHead}
 
           while (true) {
             const { value, done } = await reader.read();
+            streamLastEventAtRef.current = Date.now();
             buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
             const events = buffer.split('\n\n');
             buffer = events.pop() ?? '';
@@ -1053,6 +1327,7 @@ ${withHead}
           console.error('HTML stream error', error);
           setLlmError('Ошибка при получении потока. Попробуйте снова.');
           setIsSendingPrompt(false);
+          setLlmStatusText(null);
         } finally {
           if (!controller.signal.aborted) {
             streamControllerRef.current = null;
@@ -1065,13 +1340,56 @@ ${withHead}
     [apiBaseUrl, handleStreamEvent, parseSseEvent],
   );
 
+  // If stream stalls (no events) we fall back to /result polling to avoid infinite "Отправляем...".
+  useEffect(() => {
+    if (!isSendingPrompt) return;
+    if (!streamControllerRef.current) return;
+    const jobId = streamingJobIdRef.current;
+    if (!jobId) return;
+
+    const interval = window.setInterval(() => {
+      const lastAt = streamLastEventAtRef.current;
+      if (!lastAt) return;
+      if (Date.now() - lastAt < 20000) return;
+
+      // throttle polls
+      streamLastEventAtRef.current = Date.now();
+      void (async () => {
+        try {
+          const result = await apiFetch<any>(`/api/v1/html/result?jobId=${encodeURIComponent(jobId)}`);
+          const status = typeof result?.status === 'string' ? result.status : null;
+          if (status === 'done') {
+            applyFinalPayload(result ?? {}, { final: true });
+            setLlmStatusText(null);
+          } else if (status === 'error') {
+            const message =
+              typeof result?.error === 'string'
+                ? result.error
+                : 'Ошибка генерации HTML. Попробуйте ещё раз.';
+            setLlmError(message);
+            setIsSendingPrompt(false);
+            cleanupStream();
+            setLlmStatusText(null);
+          } else {
+            setLlmStatusText((current) => current ?? 'Генерация продолжается...');
+          }
+        } catch (error) {
+          console.error('Failed to poll html result', error);
+        }
+      })();
+    }, 1000);
+
+    return () => window.clearInterval(interval);
+  }, [applyFinalPayload, cleanupStream, isSendingPrompt]);
+
   const handlePromptSubmit = useCallback(async () => {
     const prompt = promptInput.trim();
-    if (!prompt || isSendingPrompt || isPromptReadOnly) return;
+    if (!prompt || isSendingPrompt) return;
 
     cleanupStream();
     setIsSendingPrompt(true);
     setLlmError(null);
+    setLlmStatusText(null);
     setLlmHtml(null);
     setLlmCss(null);
     setLlmSections({});
@@ -1093,9 +1411,13 @@ ${withHead}
         '/api/v1/html/start',
         {
           method: 'POST',
-          body: JSON.stringify({ prompt, lessonId: activeLesson.id }),
+          body: JSON.stringify({ prompt, lessonId: activeLesson.id, mode: activeLessonMode }),
         },
       );
+
+      if (response && typeof response === 'object' && typeof (response as any).error === 'string') {
+        throw new Error((response as any).error);
+      }
 
       if (!response?.jobId) {
         throw new Error('Сервер не вернул идентификатор задачи генерации.');
@@ -1111,17 +1433,24 @@ ${withHead}
       startHtmlStream(response.jobId);
     } catch (error) {
       console.error('Failed to send prompt to LLM', error);
-      const message =
-        error instanceof Error ? error.message : 'Ошибка при запросе LLM. Попробуйте ещё раз.';
+      let message = describeApiError(error, 'Ошибка при запросе LLM. Попробуйте ещё раз.');
+      if (error instanceof ApiError && error.status === 502) {
+        const code = (error.body as any)?.error;
+        if (code === 'LLM_PLAN_NO_SECTIONS') {
+          message =
+            'Сервер вернул LLM_PLAN_NO_SECTIONS. Проверьте, что для этого урока корректно выставлен mode (edit/add_page) и что /api/v1/html/start поддерживает запуск с mode.';
+        }
+      }
       setLlmError(message);
       setIsSendingPrompt(false);
+      setLlmStatusText(null);
     }
   }, [
     activeLesson.id,
+    activeLessonMode,
     applyProgressPatch,
     cleanupStream,
     course.id,
-    isPromptReadOnly,
     isSendingPrompt,
     promptInput,
     startHtmlStream,
@@ -1133,6 +1462,7 @@ ${withHead}
       streamingJobIdRef.current = null;
       return;
     }
+    if (!isActiveJobForLesson) return;
     if (!activeJobId) return;
     if (streamingJobIdRef.current === activeJobId) return;
 
@@ -1140,11 +1470,13 @@ ${withHead}
     setIsSendingPrompt(true);
     setLlmError(null);
     startHtmlStream(activeJobId);
-  }, [activeJobId, activeJobStatus, cleanupStream, startHtmlStream]);
+  }, [activeJobId, activeJobStatus, cleanupStream, isActiveJobForLesson, startHtmlStream]);
 
   useEffect(() => {
     if (activeJobStatus !== 'done') return;
+    if (!isActiveJobForLesson) return;
     if (!activeJobId) return;
+    if (storedWorkspace.source === 'files') return;
     if (savedResultHtml && savedResultHtml.trim()) return;
     if (fetchedResultJobIdRef.current === activeJobId) return;
 
@@ -1156,7 +1488,13 @@ ${withHead}
         const result = await apiFetch<any>(
           `/api/v1/html/result?jobId=${encodeURIComponent(activeJobId)}`,
         );
-        applyFinalPayload(result ?? {});
+        applyFinalPayload(result ?? {}, { final: true });
+        try {
+          const refreshedProgress = await fetchCourseProgress(course.id);
+          syncProgress(refreshedProgress ?? {});
+        } catch (progressError) {
+          console.error('Failed to refresh progress after result fetch', progressError);
+        }
       } catch (error) {
         console.error('Failed to fetch html result', error);
         setLlmError('Не удалось загрузить результат генерации. Попробуйте ещё раз.');
@@ -1169,35 +1507,21 @@ ${withHead}
     activeJobId,
     activeJobStatus,
     applyFinalPayload,
+    course.id,
+    isActiveJobForLesson,
     savedResultHtml,
+    storedWorkspace.source,
+    syncProgress,
   ]);
 
   useEffect(() => {
     if (!savedResultHtml || !savedResultHtml.trim()) return;
+    if (storedWorkspace.source === 'files') return;
     setLlmHtml((current) => (current === savedResultHtml ? current : savedResultHtml));
     if (activeJobStatus !== 'running') {
       setIsSendingPrompt(false);
     }
-  }, [activeJobStatus, savedResultHtml]);
-
-  const ctaData = useMemo(() => {
-    const extract = (block: unknown) => {
-      if (block && typeof block === 'object' && (block as any).type === 'cta') {
-        const buttonText = typeof (block as any).buttonText === 'string' ? (block as any).buttonText : null;
-        const action = typeof (block as any).action === 'string' ? (block as any).action : null;
-        if (buttonText || action) {
-          return { buttonText, action };
-        }
-      }
-      return null;
-    };
-
-    for (const block of visibleBlocks) {
-      const value = extract(block);
-      if (value) return value;
-    }
-    return { buttonText: null, action: null };
-  }, [visibleBlocks]);
+  }, [activeJobStatus, savedResultHtml, storedWorkspace.source]);
 
   type LessonBlockItem = { key: string; content: string; prompt: string; blockType: string | null };
 
@@ -1247,20 +1571,49 @@ ${withHead}
         return (
           <div className="flex flex-col h-full bg-[#050914] border-l border-white/5">
             <div className="flex-1 border-b border-white/5 relative overflow-hidden">
-              {iframeHtml ? (
-                <iframe
-                  key={`${activeLesson.id}-${iframeHtml.length}`}
-                  srcDoc={iframeHtml}
-                  title="LLM Generated Site"
-                  className="w-full h-full bg-black"
-                  sandbox="allow-scripts allow-same-origin"
-                />
-              ) : (
+	              {hasRenderablePreview ? (
+	                <div className="absolute inset-0 flex flex-col">
+	                  {Object.keys(previewWorkspace.files).length > 1 && (
+	                    <div className="shrink-0 flex gap-1 px-2 py-2 bg-[#02050e] border-b border-white/5 overflow-x-auto">
+	                      {Object.keys(previewWorkspace.files)
+	                        .sort()
+	                        .map((name) => (
+	                          <button
+	                            key={name}
+	                            type="button"
+	                            onClick={() => {
+	                              void setActiveFileRemote(name);
+	                            }}
+	                            className={`px-2 py-1 rounded-md text-xs font-mono border transition-colors ${
+	                              uiActiveFile === name
+	                                ? 'bg-vibe-500/15 border-vibe-500/30 text-vibe-200'
+	                                : 'bg-white/5 border-white/10 text-slate-300 hover:bg-white/10'
+	                            }`}
+	                            style={{ cursor: 'pointer' }}
+	                          >
+	                            {name}
+	                          </button>
+	                        ))}
+	                    </div>
+	                  )}
+	                  <iframe
+	                    ref={previewIframeRef}
+	                    key={`${activeLesson.id}-${uiActiveFile}`}
+	                    srcDoc={iframeSrcDoc}
+	                    title="LLM Generated Site"
+	                    className="w-full flex-1 bg-black"
+	                    sandbox="allow-scripts allow-same-origin"
+	                  />
+	                </div>
+	              ) : (
                 <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-400 gap-3 p-6 text-center">
                   {isSendingPrompt ? (
                     <>
                       <div className="w-10 h-10 border-2 border-white/10 border-t-vibe-500 rounded-full animate-spin"></div>
                       <p className="font-mono text-sm text-slate-200">Генерируем сайт...</p>
+                      {llmStatusText && (
+                        <p className="text-xs text-slate-400 max-w-md">{llmStatusText}</p>
+                      )}
                     </>
                   ) : (
                     <>
@@ -1282,14 +1635,13 @@ ${withHead}
                   <div className="w-3 h-3 rounded-full bg-yellow-500/20"></div>
                   <div className="w-3 h-3 rounded-full bg-green-500/20"></div>
                 </div>
-              {llmError && !iframeHtml && (
+              {llmError && !hasRenderablePreview && (
                 <div className="text-xs text-red-200 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2 mb-2">
                   {llmError}
                 </div>
               )}
               <div className="relative flex-1 mt-1">
                 <textarea
-                  disabled={isPromptReadOnly}
                   value={promptInput}
                   onChange={(e) => setPromptInput(e.target.value)}
                   className={`w-full h-full bg-transparent text-sm resize-none font-mono focus:outline-none pr-28 ${
@@ -1301,7 +1653,7 @@ ${withHead}
                   <button
                     type="button"
                     onClick={handlePromptSubmit}
-                    disabled={isSendingPrompt || isPromptReadOnly}
+                    disabled={isSendingPrompt}
                     className="absolute bottom-3 right-3 px-3 py-1.5 rounded-lg bg-vibe-600 text-white text-xs font-semibold flex items-center gap-2 shadow-lg shadow-vibe-900/30 hover:bg-vibe-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                     style={{ cursor: 'pointer' }}
                   >
@@ -1579,7 +1931,6 @@ ${withHead}
                                 disabled={activeLessonIndex === course.lessons.length - 1 || !isCtaUnlocked}
                                 onClick={() => goToLesson(activeLessonIndex + 1, { completeCurrent: true })}
                                 className="px-6 py-2.5 rounded-xl bg-vibe-600 text-white font-bold hover:bg-vibe-500 transition-colors shadow-lg shadow-vibe-900/20 disabled:opacity-50 text-sm flex items-center gap-2"
-                                data-action={ctaData.action ?? undefined}
                             >
                                 {ctaData.buttonText ?? 'Следующий'} <ChevronRight className="w-4 h-4" />
                             </button>

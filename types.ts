@@ -48,6 +48,10 @@ export interface Lesson {
   blocks?: unknown;
   initialCode?: string; // For code gen lessons
   unlock_rule?: unknown; // unlock conditions from backend (raw shape)
+  // Backend-controlled behavior flags (e.g. edit/add_page/create)
+  settings?: unknown;
+  mode?: string | null;
+  settings_mode?: string | null;
 }
 
 export interface User {
