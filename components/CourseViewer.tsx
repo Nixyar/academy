@@ -213,7 +213,14 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
 }) => {
   const apiBaseUrl =
     (import.meta as any).env?.DEV === true ? '' : (import.meta as any).env?.VITE_API_BASE_URL ?? '';
-  const [activeLessonIndex, setActiveLessonIndex] = useState(0);
+  const [activeLessonIndex, setActiveLessonIndex] = useState(() => {
+    const resumeId = initialProgress?.resume_lesson_id || initialProgress?.last_viewed_lesson_id;
+    if (resumeId) {
+      const idx = course.lessons.findIndex((l) => l.id === resumeId);
+      if (idx !== -1) return idx;
+    }
+    return 0;
+  });
   const activeLesson = course.lessons[activeLessonIndex];
   const activeLessonMode = useMemo(() => getLessonMode(activeLesson), [activeLesson]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -251,25 +258,33 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
       ? (courseProgress as any).active_job_id
       : rawActiveJob && typeof rawActiveJob === 'object'
         ? (typeof (rawActiveJob as any).jobId === 'string'
-            ? (rawActiveJob as any).jobId
-            : typeof (rawActiveJob as any).job_id === 'string'
-              ? (rawActiveJob as any).job_id
-              : null)
+          ? (rawActiveJob as any).jobId
+          : typeof (rawActiveJob as any).job_id === 'string'
+            ? (rawActiveJob as any).job_id
+            : null)
         : null;
   const activeJobId = typeof rawActiveJobId === 'string' ? rawActiveJobId : null;
   const rawActiveJobPrompt =
     (courseProgress as any)?.active_job_prompt ??
     (rawActiveJob && typeof rawActiveJob === 'object' ? (rawActiveJob as any).prompt : null);
   const activeJobPrompt = typeof rawActiveJobPrompt === 'string' ? rawActiveJobPrompt : '';
+  const rawActiveJobError =
+    (rawActiveJob && typeof rawActiveJob === 'object' ? (rawActiveJob as any).error : null) ??
+    (rawActiveJob && typeof rawActiveJob === 'object' ? (rawActiveJob as any).code : null);
+  const activeJobError = typeof rawActiveJobError === 'string' ? rawActiveJobError : null;
+  const rawActiveJobErrorDetails =
+    (rawActiveJob && typeof rawActiveJob === 'object' ? (rawActiveJob as any).error_details : null) ??
+    (rawActiveJob && typeof rawActiveJob === 'object' ? (rawActiveJob as any).details : null);
+  const activeJobErrorDetails = typeof rawActiveJobErrorDetails === 'string' ? rawActiveJobErrorDetails : null;
   const rawActiveJobLessonId =
     typeof (courseProgress as any)?.active_job_lesson_id === 'string'
       ? (courseProgress as any).active_job_lesson_id
       : rawActiveJob && typeof rawActiveJob === 'object'
         ? (typeof (rawActiveJob as any).lessonId === 'string'
-            ? (rawActiveJob as any).lessonId
-            : typeof (rawActiveJob as any).lesson_id === 'string'
-              ? (rawActiveJob as any).lesson_id
-              : null)
+          ? (rawActiveJob as any).lessonId
+          : typeof (rawActiveJob as any).lesson_id === 'string'
+            ? (rawActiveJob as any).lesson_id
+            : null)
         : null;
   const activeJobLessonId = typeof rawActiveJobLessonId === 'string' ? rawActiveJobLessonId : null;
   const isPromptLocked = Boolean(activeJobStatus);
@@ -287,9 +302,9 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     ((courseProgress as any)?.result?.files &&
       typeof (courseProgress as any).result.files === 'object' &&
       !Array.isArray((courseProgress as any).result.files)) ||
-      ((courseProgress as any)?.lessons?.[activeLesson.id]?.result?.files &&
-        typeof (courseProgress as any).lessons?.[activeLesson.id]?.result?.files === 'object' &&
-        !Array.isArray((courseProgress as any).lessons?.[activeLesson.id]?.result?.files)),
+    ((courseProgress as any)?.lessons?.[activeLesson.id]?.result?.files &&
+      typeof (courseProgress as any).lessons?.[activeLesson.id]?.result?.files === 'object' &&
+      !Array.isArray((courseProgress as any).lessons?.[activeLesson.id]?.result?.files)),
   );
   const hasCompletedJob = activeJobStatus === 'done';
 
@@ -427,7 +442,14 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
 
   useEffect(() => {
     let cancelled = false;
-    setProgressLoading(true);
+
+    // If we already have initialProgress with a resume point, we've already set the index.
+    // We still want to fetch the absolute latest, but without showing a full loader if we have data.
+    const hasInitialData = !!initialProgress?.resume_lesson_id;
+    if (!hasInitialData) {
+      setProgressLoading(true);
+    }
+
     (async () => {
       try {
         const [progressData, resumeData] = await Promise.all([
@@ -442,25 +464,26 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
         const resumeIndex = resumeLessonId
           ? course.lessons.findIndex((lesson) => lesson.id === resumeLessonId)
           : -1;
-        const nextLessonIndex = resumeIndex >= 0 ? resumeIndex : 0;
 
-        setActiveLessonIndex(nextLessonIndex);
+        if (resumeIndex >= 0) {
+          setActiveLessonIndex(resumeIndex);
+        }
 
-        const nextLesson = course.lessons[nextLessonIndex];
-        if (nextLesson) {
-          const nextLessonStatus = progressData?.lessons?.[nextLesson.id]?.status;
+        const currentLesson = course.lessons[resumeIndex >= 0 ? resumeIndex : activeLessonIndex];
+        if (currentLesson) {
+          const status = progressData?.lessons?.[currentLesson.id]?.status;
 
-          if (nextLessonStatus !== 'completed') {
+          if (status !== 'completed') {
             await applyProgressPatch({
               op: 'lesson_status',
-              lessonId: nextLesson.id,
+              lessonId: currentLesson.id,
               status: 'in_progress',
             });
           }
 
           await applyProgressPatch({
             op: 'set_resume',
-            lessonId: nextLesson.id,
+            lessonId: currentLesson.id,
           });
         }
       } catch (error) {
@@ -526,9 +549,9 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
         const value =
           (normalizedGate as any).equals !== undefined
             ? (normalizedGate as any).equals
-              : (normalizedGate as any).value !== undefined
-                ? (normalizedGate as any).value
-                : (normalizedGate as any).expected;
+            : (normalizedGate as any).value !== undefined
+              ? (normalizedGate as any).value
+              : (normalizedGate as any).expected;
         if (!path) return true;
         const resolvedGate = resolveUnlockPlaceholders({ op: 'equals', path, value });
         return evaluateUnlockRule(resolvedGate, gateContext);
@@ -669,8 +692,13 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     const lessonChanged = activeLesson.id !== lastLessonIdRef.current;
     lastLessonIdRef.current = activeLesson.id;
     const hasLiveStream = Boolean(streamControllerRef.current && streamingJobIdRef.current);
-    const keepStreamAlive = !lessonChanged && hasLiveStream && isActiveJobForLesson;
+    // Keep SSE stream alive across lesson navigation; abort only on CourseViewer unmount (exit course).
+    const keepStreamAlive = hasLiveStream;
     const hasSavedHtml = hasStoredFilesResult || Boolean(savedResultHtml && savedResultHtml.trim());
+    const failedMessage =
+      activeJobStatus === 'failed' && isActiveJobForLesson
+        ? [activeJobError ?? 'Генерация не удалась.', activeJobErrorDetails].filter(Boolean).join(': ')
+        : null;
 
     const initialPrompt = savedPrompt ?? (isPromptLockedForLesson ? activeJobPrompt : '');
     setPromptInput(initialPrompt);
@@ -680,7 +708,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     } else {
       setIsSendingPrompt(activeJobStatus === 'running' && isActiveJobForLesson && !hasSavedHtml);
       setLlmHtml(hasSavedHtml && !hasStoredFilesResult ? savedResultHtml : null);
-      setLlmError(null);
+      setLlmError(failedMessage);
       setLlmOutline(null);
       setLlmCss(null);
       setLlmSections({});
@@ -689,19 +717,6 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
       llmSectionsRef.current = {};
       llmSectionOrderRef.current = [];
       llmOutlineRef.current = null;
-      // Abort stream only when we are sure it's no longer relevant.
-      const shouldAbortStream =
-        lessonChanged ||
-        !isActiveJobForLesson ||
-        (activeJobStatus === 'running' &&
-          streamingJobIdRef.current &&
-          activeJobId &&
-          streamingJobIdRef.current !== activeJobId);
-      if (shouldAbortStream && streamControllerRef.current) {
-        streamControllerRef.current.abort();
-        streamControllerRef.current = null;
-      }
-      if (shouldAbortStream) streamingJobIdRef.current = null;
     }
   }, [
     activeJobId,
@@ -709,6 +724,8 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     activeJobStatus,
     activeLesson.id,
     isActiveJobForLesson,
+    activeJobError,
+    activeJobErrorDetails,
     savedPrompt,
     isPromptLockedForLesson,
     savedResultHtml,
@@ -771,19 +788,19 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
         const itemsRaw = (block as any).items;
         const items = Array.isArray(itemsRaw)
           ? itemsRaw
-              .map((item) => {
-                if (!item || typeof item !== 'object') return null;
-                const label = typeof (item as any).label === 'string' ? (item as any).label : null;
-                const content = typeof (item as any).content === 'string' ? (item as any).content : null;
-                const notes = Array.isArray((item as any).notes)
-                  ? ((item as any).notes as unknown[])
-                      .filter((note) => typeof note === 'string')
-                      .map((note) => note as string)
-                  : null;
-                if (!label && !content) return null;
-                return { label, content, notes };
-              })
-              .filter(Boolean) as { label: string | null; content: string | null; notes: string[] | null }[]
+            .map((item) => {
+              if (!item || typeof item !== 'object') return null;
+              const label = typeof (item as any).label === 'string' ? (item as any).label : null;
+              const content = typeof (item as any).content === 'string' ? (item as any).content : null;
+              const notes = Array.isArray((item as any).notes)
+                ? ((item as any).notes as unknown[])
+                  .filter((note) => typeof note === 'string')
+                  .map((note) => note as string)
+                : null;
+              if (!label && !content) return null;
+              return { label, content, notes };
+            })
+            .filter(Boolean) as { label: string | null; content: string | null; notes: string[] | null }[]
           : null;
         return { title, tip, items };
       }
@@ -1099,12 +1116,12 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
         outlineKeys.length > 0
           ? outlineKeys.filter((key) => mergedSections[key])
           : (() => {
-              const base = [...llmSectionOrderRef.current];
-              Object.keys(payloadSections).forEach((key) => {
-                if (!base.includes(key)) base.push(key);
-              });
-              return base.filter((key) => mergedSections[key]);
-            })();
+            const base = [...llmSectionOrderRef.current];
+            Object.keys(payloadSections).forEach((key) => {
+              if (!base.includes(key)) base.push(key);
+            });
+            return base.filter((key) => mergedSections[key]);
+          })();
       llmSectionOrderRef.current = mergedOrder;
       setLlmSectionOrder(mergedOrder);
 
@@ -1238,6 +1255,15 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
             : payload ?? {};
         applyFinalPayload(finalPayload, { final: true });
         setLlmStatusText(null);
+        // For edit/add_page jobs the SSE payload may not include full HTML; refresh progress to get updated workspace.
+        void (async () => {
+          try {
+            const refreshedProgress = await fetchCourseProgress(course.id);
+            syncProgress(refreshedProgress ?? {});
+          } catch (progressError) {
+            console.error('Failed to refresh progress after done', progressError);
+          }
+        })();
         return;
       }
 
@@ -1269,7 +1295,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
         setLlmStatusText(null);
       }
     },
-    [applyFinalPayload, buildHtml, cleanupStream, parseJsonSafe],
+    [applyFinalPayload, buildHtml, cleanupStream, course.id, parseJsonSafe, syncProgress],
   );
 
   const startHtmlStream = useCallback(
@@ -1411,7 +1437,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
         '/api/v1/html/start',
         {
           method: 'POST',
-          body: JSON.stringify({ prompt, lessonId: activeLesson.id, mode: activeLessonMode }),
+          body: JSON.stringify({ prompt, lessonId: activeLesson.id, mode: activeLessonMode, courseId: course.id }),
         },
       );
 
@@ -1571,41 +1597,40 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
         return (
           <div className="flex flex-col h-full bg-[#050914] border-l border-white/5">
             <div className="flex-1 border-b border-white/5 relative overflow-hidden">
-	              {hasRenderablePreview ? (
-	                <div className="absolute inset-0 flex flex-col">
-	                  {Object.keys(previewWorkspace.files).length > 1 && (
-	                    <div className="shrink-0 flex gap-1 px-2 py-2 bg-[#02050e] border-b border-white/5 overflow-x-auto">
-	                      {Object.keys(previewWorkspace.files)
-	                        .sort()
-	                        .map((name) => (
-	                          <button
-	                            key={name}
-	                            type="button"
-	                            onClick={() => {
-	                              void setActiveFileRemote(name);
-	                            }}
-	                            className={`px-2 py-1 rounded-md text-xs font-mono border transition-colors ${
-	                              uiActiveFile === name
-	                                ? 'bg-vibe-500/15 border-vibe-500/30 text-vibe-200'
-	                                : 'bg-white/5 border-white/10 text-slate-300 hover:bg-white/10'
-	                            }`}
-	                            style={{ cursor: 'pointer' }}
-	                          >
-	                            {name}
-	                          </button>
-	                        ))}
-	                    </div>
-	                  )}
-	                  <iframe
-	                    ref={previewIframeRef}
-	                    key={`${activeLesson.id}-${uiActiveFile}`}
-	                    srcDoc={iframeSrcDoc}
-	                    title="LLM Generated Site"
-	                    className="w-full flex-1 bg-black"
-	                    sandbox="allow-scripts allow-same-origin"
-	                  />
-	                </div>
-	              ) : (
+              {hasRenderablePreview ? (
+                <div className="absolute inset-0 flex flex-col">
+                  {Object.keys(previewWorkspace.files).length > 1 && (
+                    <div className="shrink-0 flex gap-1 px-2 py-2 bg-[#02050e] border-b border-white/5 overflow-x-auto">
+                      {Object.keys(previewWorkspace.files)
+                        .sort()
+                        .map((name) => (
+                          <button
+                            key={name}
+                            type="button"
+                            onClick={() => {
+                              void setActiveFileRemote(name);
+                            }}
+                            className={`px-2 py-1 rounded-md text-xs font-mono border transition-colors ${uiActiveFile === name
+                                ? 'bg-vibe-500/15 border-vibe-500/30 text-vibe-200'
+                                : 'bg-white/5 border-white/10 text-slate-300 hover:bg-white/10'
+                              }`}
+                            style={{ cursor: 'pointer' }}
+                          >
+                            {name}
+                          </button>
+                        ))}
+                    </div>
+                  )}
+                  <iframe
+                    ref={previewIframeRef}
+                    key={`${activeLesson.id}-${uiActiveFile}`}
+                    srcDoc={iframeSrcDoc}
+                    title="LLM Generated Site"
+                    className="w-full flex-1 bg-black"
+                    sandbox="allow-scripts allow-same-origin"
+                  />
+                </div>
+              ) : (
                 <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-400 gap-3 p-6 text-center">
                   {isSendingPrompt ? (
                     <>
@@ -1632,9 +1657,9 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
             <div className="h-1/3 p-4 bg-[#02050e] flex flex-col">
               <div className="flex gap-2 mb-2">
                 <div className="w-3 h-3 rounded-full bg-red-500/20"></div>
-                  <div className="w-3 h-3 rounded-full bg-yellow-500/20"></div>
-                  <div className="w-3 h-3 rounded-full bg-green-500/20"></div>
-                </div>
+                <div className="w-3 h-3 rounded-full bg-yellow-500/20"></div>
+                <div className="w-3 h-3 rounded-full bg-green-500/20"></div>
+              </div>
               {llmError && !hasRenderablePreview && (
                 <div className="text-xs text-red-200 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2 mb-2">
                   {llmError}
@@ -1644,9 +1669,8 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
                 <textarea
                   value={promptInput}
                   onChange={(e) => setPromptInput(e.target.value)}
-                  className={`w-full h-full bg-transparent text-sm resize-none font-mono focus:outline-none pr-28 ${
-                    isWorkshopLesson ? 'text-slate-200' : 'text-slate-500'
-                  }`}
+                  className={`w-full h-full bg-transparent text-sm resize-none font-mono focus:outline-none pr-28 ${isWorkshopLesson ? 'text-slate-200' : 'text-slate-500'
+                    }`}
                   placeholder={isLectureLesson ? '' : 'Console ready...'}
                 />
                 {isWorkshopLesson && promptInput.trim().length > 0 && (
@@ -1670,283 +1694,282 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
 
   return (
     <div className="h-screen w-screen flex flex-col bg-void text-white overflow-hidden font-sans">
-        {/* Header */}
-        <header className="h-16 border-b border-white/5 bg-[#050914] flex items-center justify-between px-4 shrink-0 z-30">
-            <div className="flex items-center gap-4">
-                <button 
-                    onClick={onBack} 
-                    className="flex items-center gap-2 text-slate-400 hover:text-white transition-colors text-sm font-bold uppercase tracking-wider hover:bg-white/5 px-3 py-1.5 rounded-lg"
-                >
-                    <ChevronLeft className="w-4 h-4" /> Назад
-                </button>
-                <div className="h-6 w-px bg-white/10 mx-2 hidden md:block"></div>
-                <h1 className="font-bold text-lg hidden md:block font-display tracking-tight text-slate-200">{course.title}</h1>
-            </div>
-            <div className="flex items-center gap-4">
-                <span className="text-xs text-vibe-400 font-mono px-3 py-1 bg-vibe-500/10 border border-vibe-500/20 rounded-full">
-                    Урок {activeLessonIndex + 1} / {course.lessons.length}
-                </span>
-                <button 
-                    className="md:hidden text-slate-300"
-                    onClick={() => setSidebarOpen(!sidebarOpen)}
-                >
-                    {sidebarOpen ? <X /> : <Menu />}
-                </button>
-            </div>
-        </header>
+      {/* Header */}
+      <header className="h-16 border-b border-white/5 bg-[#050914] flex items-center justify-between px-4 shrink-0 z-30">
+        <div className="flex items-center gap-4">
+          <button
+            onClick={onBack}
+            className="flex items-center gap-2 text-slate-400 hover:text-white transition-colors text-sm font-bold uppercase tracking-wider hover:bg-white/5 px-3 py-1.5 rounded-lg"
+          >
+            <ChevronLeft className="w-4 h-4" /> Назад
+          </button>
+          <div className="h-6 w-px bg-white/10 mx-2 hidden md:block"></div>
+          <h1 className="font-bold text-lg hidden md:block font-display tracking-tight text-slate-200">{course.title}</h1>
+        </div>
+        <div className="flex items-center gap-4">
+          <span className="text-xs text-vibe-400 font-mono px-3 py-1 bg-vibe-500/10 border border-vibe-500/20 rounded-full">
+            Урок {activeLessonIndex + 1} / {course.lessons.length}
+          </span>
+          <button
+            className="md:hidden text-slate-300"
+            onClick={() => setSidebarOpen(!sidebarOpen)}
+          >
+            {sidebarOpen ? <X /> : <Menu />}
+          </button>
+        </div>
+      </header>
 
-        <div className="flex-1 flex overflow-hidden relative">
-            {/* Sidebar (Lesson List) */}
-            <aside className={`
+      <div className="flex-1 flex overflow-hidden relative">
+        {/* Sidebar (Lesson List) */}
+        <aside className={`
                 absolute md:relative z-20 w-72 bg-[#02050e] border-r border-white/5 h-full transition-transform duration-300 flex flex-col
                 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
             `}>
-                <div className="overflow-y-auto h-full pb-20 custom-scrollbar">
-                    {course.lessons.map((lesson, idx) => {
-                      const canNavigate = unlockedLessonIds.has(lesson.id);
-                      return (
-                        <button
-                          key={lesson.id}
-                          onClick={() => (canNavigate ? goToLesson(idx) : undefined)}
-                          disabled={!canNavigate}
-                          className={`w-full text-left p-4 border-b border-white/5 hover:bg-white/5 transition-all flex items-start gap-3 group
+          <div className="overflow-y-auto h-full pb-20 custom-scrollbar">
+            {course.lessons.map((lesson, idx) => {
+              const canNavigate = unlockedLessonIds.has(lesson.id);
+              return (
+                <button
+                  key={lesson.id}
+                  onClick={() => (canNavigate ? goToLesson(idx) : undefined)}
+                  disabled={!canNavigate}
+                  className={`w-full text-left p-4 border-b border-white/5 hover:bg-white/5 transition-all flex items-start gap-3 group
                               ${activeLessonIndex === idx ? 'bg-white/5 border-l-2 border-l-vibe-500' : 'border-l-2 border-l-transparent'}
                               ${canNavigate ? '' : 'opacity-50 cursor-not-allowed'}
                           `}
-                        >
-                          <div className={`mt-0.5 w-6 h-6 rounded flex items-center justify-center text-[10px] font-bold transition-colors
+                >
+                  <div className={`mt-0.5 w-6 h-6 rounded flex items-center justify-center text-[10px] font-bold transition-colors
                               ${activeLessonIndex === idx ? 'bg-vibe-500 text-white shadow-lg shadow-vibe-500/20' : 'bg-slate-800 text-slate-500 group-hover:bg-slate-700'}
                           `}>
-                              {idx + 1}
-                          </div>
-                          <div>
-                              <h4 className={`text-sm font-medium mb-1 transition-colors ${activeLessonIndex === idx ? 'text-white' : 'text-slate-400 group-hover:text-slate-200'}`}>
-                                  {lesson.title}
-                              </h4>
-                              <span className="text-[10px] text-slate-600 uppercase tracking-wider font-bold">
-                                  {lesson.lessonTypeRu ?? lesson.lessonType ?? lesson.type ?? ''}
-                              </span>
-                          </div>
-                        </button>
-                      );
-                    })}
-                </div>
-            </aside>
+                    {idx + 1}
+                  </div>
+                  <div>
+                    <h4 className={`text-sm font-medium mb-1 transition-colors ${activeLessonIndex === idx ? 'text-white' : 'text-slate-400 group-hover:text-slate-200'}`}>
+                      {lesson.title}
+                    </h4>
+                    <span className="text-[10px] text-slate-600 uppercase tracking-wider font-bold">
+                      {lesson.lessonTypeRu ?? lesson.lessonType ?? lesson.type ?? ''}
+                    </span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </aside>
 
-            {/* Main Content Area */}
-            <main className="flex-1 flex flex-col md:flex-row h-full overflow-hidden">
-                
-                {/* Left Side: Description & Video */}
-                <div className="w-full md:w-1/2 overflow-y-auto p-6 md:p-10 custom-scrollbar bg-void">
-                    <div className="max-w-3xl mx-auto">
-                        <div className="mb-8">
-                             <span className="text-vibe-400 text-xs font-bold uppercase tracking-widest mb-2 block">
-                               {activeLesson.lessonTypeRu ?? activeLesson.lessonType ?? activeLesson.type ?? 'Lesson'}
-                             </span>
-                             <h2 className="text-3xl md:text-4xl font-bold text-white font-display">{activeLesson.title}</h2>
-                             {heroSubtitle && (
-                               <p className="text-slate-300 text-base md:text-lg leading-relaxed mt-3">
-                                 {heroSubtitle}
-                               </p>
-                             )}
+        {/* Main Content Area */}
+        <main className="flex-1 flex flex-col md:flex-row h-full overflow-hidden">
+
+          {/* Left Side: Description & Video */}
+          <div className="w-full md:w-1/2 overflow-y-auto p-6 md:p-10 custom-scrollbar bg-void">
+            <div className="max-w-3xl mx-auto">
+              <div className="mb-8">
+                <span className="text-vibe-400 text-xs font-bold uppercase tracking-widest mb-2 block">
+                  {activeLesson.lessonTypeRu ?? activeLesson.lessonType ?? activeLesson.type ?? 'Lesson'}
+                </span>
+                <h2 className="text-3xl md:text-4xl font-bold text-white font-display">{activeLesson.title}</h2>
+                {heroSubtitle && (
+                  <p className="text-slate-300 text-base md:text-lg leading-relaxed mt-3">
+                    {heroSubtitle}
+                  </p>
+                )}
+              </div>
+
+              <div className="prose prose-invert prose-lg prose-headings:font-display prose-p:text-slate-400 prose-strong:text-white max-w-none space-y-6">
+                {blockItems.map((block, idx) =>
+                  block.blockType === 'tip' ? (
+                    <div key={block.key} className="not-prose space-y-2">
+                      <p className="text-[11px] uppercase tracking-[0.32em] text-slate-400 font-semibold">
+                        Практические советы
+                      </p>
+                      <div className="relative overflow-hidden rounded-2xl border border-emerald-400/35 bg-gradient-to-br from-[#0c1613] via-[#0a1413] to-[#081012] shadow-lg shadow-emerald-900/30">
+                        <div
+                          className="absolute inset-0 pointer-events-none opacity-40"
+                          style={{
+                            background:
+                              'radial-gradient(circle at 20% 30%, rgba(16,185,129,0.14), transparent 45%), radial-gradient(circle at 85% 20%, rgba(16,185,129,0.18), transparent 40%)',
+                          }}
+                          aria-hidden
+                        />
+                        <div className="relative flex items-start gap-3 p-4 md:p-5">
+                          <div className="mt-0.5 flex h-7 w-7 items-center justify-center rounded-full border border-emerald-500/50 bg-emerald-500/5 text-emerald-400">
+                            <Info className="h-3.5 w-3.5" />
+                          </div>
+                          <p className="text-[16px] md:text-[17px] text-emerald-50 whitespace-pre-line leading-[1.35] font-medium">
+                            {block.content}
+                          </p>
                         </div>
-
-                        <div className="prose prose-invert prose-lg prose-headings:font-display prose-p:text-slate-400 prose-strong:text-white max-w-none space-y-6">
-                          {blockItems.map((block, idx) =>
-                            block.blockType === 'tip' ? (
-                              <div key={block.key} className="not-prose space-y-2">
-                                <p className="text-[11px] uppercase tracking-[0.32em] text-slate-400 font-semibold">
-                                  Практические советы
-                                </p>
-                                <div className="relative overflow-hidden rounded-2xl border border-emerald-400/35 bg-gradient-to-br from-[#0c1613] via-[#0a1413] to-[#081012] shadow-lg shadow-emerald-900/30">
-                                  <div
-                                    className="absolute inset-0 pointer-events-none opacity-40"
-                                    style={{
-                                      background:
-                                        'radial-gradient(circle at 20% 30%, rgba(16,185,129,0.14), transparent 45%), radial-gradient(circle at 85% 20%, rgba(16,185,129,0.18), transparent 40%)',
-                                    }}
-                                    aria-hidden
-                                  />
-                                  <div className="relative flex items-start gap-3 p-4 md:p-5">
-                                    <div className="mt-0.5 flex h-7 w-7 items-center justify-center rounded-full border border-emerald-500/50 bg-emerald-500/5 text-emerald-400">
-                                      <Info className="h-3.5 w-3.5" />
-                                    </div>
-                                    <p className="text-[16px] md:text-[17px] text-emerald-50 whitespace-pre-line leading-[1.35] font-medium">
-                                      {block.content}
-                                    </p>
-                                  </div>
-                                </div>
-                              </div>
-                            ) : (
-                              <div key={block.key} className="space-y-3">
-                                {block.content && (
-                                  <p className="whitespace-pre-line leading-relaxed">{block.content}</p>
-                                )}
-                                {block.prompt && (
-                                  <div className="relative p-4 md:p-5 rounded-xl bg-[#0b1020] border border-vibe-500/30">
-                                    <button
-                                      type="button"
-                                      onClick={() => handleCopyPrompt(block.prompt, idx)}
-                                      className="absolute -top-3 right-4 text-[9px] md:text-[10px] uppercase tracking-wide px-2.5 py-1.5 rounded-md border border-white/15 text-slate-200 bg-white/5 backdrop-blur-sm hover:bg-white/10 hover:border-vibe-400/40 hover:text-white transition-colors shadow-lg shadow-black/30"
-                                      style={{ cursor: 'pointer' }}
-                                    >
-                                      {copiedPromptBlock === idx ? 'Скопировано' : 'Скопировать'}
-                                    </button>
-                                    <p className="text-xs md:text-sm text-white whitespace-pre-line leading-relaxed">
-                                      {block.prompt}
-                                    </p>
-                                  </div>
-                                )}
-                              </div>
-                            )
-                          )}
-                        </div>
-
-                        {examplesBlock && (
-                          <div className="mt-8 p-6 rounded-2xl border border-white/10 bg-white/5 shadow-lg shadow-black/20 space-y-4">
-                            <div className="flex items-start gap-3">
-                              <div className="w-10 h-10 rounded-full bg-purple-500/15 text-purple-200 font-bold flex items-center justify-center border border-purple-500/20 text-lg">
-                                ✦
-                              </div>
-                              <div className="space-y-1">
-                                <p className="text-xs uppercase tracking-wider text-purple-200 font-semibold">Examples</p>
-                                <p className="text-2xl font-display font-semibold text-white leading-tight">
-                                  {examplesBlock.title ?? 'Примеры'}
-                                </p>
-                                {examplesBlock.tip && (
-                                  <p className="text-sm text-slate-300 whitespace-pre-line leading-relaxed max-w-3xl">
-                                    {examplesBlock.tip}
-                                  </p>
-                                )}
-                              </div>
-                            </div>
-
-                            {examplesBlock.items && examplesBlock.items.length > 0 && (
-                              <div className="space-y-3">
-                                {examplesBlock.items.map((item, idx) => {
-                                  const label = (item.label ?? '').toLowerCase();
-                                  const isBad = label.includes('плох');
-                                  const accentClasses = isBad
-                                    ? 'bg-[#0b1020] border-slate-700/40 text-slate-200'
-                                    : 'bg-[#0c1a22] border-teal-500/25 text-teal-100';
-                                  const badgeClasses = isBad
-                                    ? 'bg-slate-700/40 text-slate-200 border border-slate-500/40'
-                                    : 'bg-teal-500/20 text-teal-100 border border-teal-400/30';
-                                  const noteColor = isBad ? 'text-slate-400' : 'text-teal-100/80';
-
-                                  return (
-                                    <div
-                                      key={idx}
-                                      className={`p-4 rounded-xl border ${accentClasses} space-y-2`}
-                                    >
-                                      <div className="flex items-center gap-2">
-                                        {item.label && (
-                                          <span className={`text-xs font-semibold uppercase tracking-wide px-2 py-1 rounded-full ${badgeClasses}`}>
-                                            {item.label}
-                                          </span>
-                                        )}
-                                      </div>
-                                      {item.content && (
-                                        <div className="rounded-lg bg-white/5 px-3 py-2 border border-white/5 relative">
-                                          <button
-                                            type="button"
-                                            onClick={() => handleCopyExample(item.content, idx)}
-                                            className="absolute top-2 right-2 text-[11px] uppercase tracking-wide px-2 py-1 rounded-md border border-white/10 text-slate-300 hover:border-vibe-400/40 hover:text-white transition-colors"
-                                            style={{ cursor: item.content ? 'pointer' : 'default' }}
-                                          >
-                                            {copiedExample === idx ? 'Скопировано' : 'Копировать'}
-                                          </button>
-                                          <p className="text-sm text-white whitespace-pre-line leading-relaxed max-w-3xl pr-16">
-                                            {item.content}
-                                          </p>
-                                        </div>
-                                      )}
-                                      {item.notes && item.notes.length > 0 && (
-                                        <ul className="space-y-1.5 text-sm leading-snug list-disc list-inside">
-                                          {item.notes.map((note, noteIdx) => (
-                                            <li key={noteIdx} className={noteColor}>
-                                              {note}
-                                            </li>
-                                          ))}
-                                        </ul>
-                                      )}
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            )}
-                          </div>
-                        )}
-
-                        {quizBlock && (
-                          <div className="mt-8 p-6 rounded-2xl border border-white/10 bg-white/5 shadow-lg shadow-black/20">
-                            <div className="flex items-start gap-3 mb-3">
-                              <div className="w-10 h-10 rounded-full bg-vibe-500/15 text-vibe-300 font-bold flex items-center justify-center border border-vibe-500/20">
-                                ?
-                              </div>
-                              <div>
-                                <p className="text-xs uppercase tracking-wider text-vibe-300 font-bold mb-1">Quiz</p>
-                                <p className="text-xl font-display text-white leading-tight">
-                                  {quizBlock.title ?? 'Мини-эксперимент'}
-                                </p>
-                              </div>
-                            </div>
-                            {quizBlock.question && (
-                              <p className="text-slate-300 whitespace-pre-line leading-relaxed">{quizBlock.question}</p>
-                            )}
-                            {quizBlock.options && quizBlock.options.length > 0 && (
-                              <div className="mt-4 space-y-2">
-                                {quizBlock.options.map((option, idx) => (
-                                  <button
-                                    key={idx}
-                                    type="button"
-                                    onClick={() => handleQuizSelect(idx, option)}
-                                    className={`w-full text-left px-4 py-3 rounded-xl border transition-colors ${
-                                      quizAnswer === idx
-                                        ? 'bg-green-500/10 border-green-400/40 text-green-100'
-                                        : 'bg-[#070c18] border-white/5 text-slate-200 hover:border-vibe-500/30 hover:bg-white/5'
-                                    }`}
-                                    style={{ cursor: 'pointer' }}
-                                  >
-                                    <span className="text-sm">{option}</span>
-                                  </button>
-                                ))}
-                              </div>
-                            )}
-                            {quizBlock.note && (
-                              <div className="mt-4 text-xs text-slate-400 italic">Note: {quizBlock.note}</div>
-                            )}
-                          </div>
-                        )}
-                        
-                        <div className="mt-12 flex justify-between items-center pt-8 border-t border-white/10">
-                            <button 
-                                disabled={activeLessonIndex === 0}
-                                onClick={() => goToLesson(activeLessonIndex - 1)}
-                                className="px-5 py-2.5 rounded-xl border border-white/10 text-slate-400 disabled:opacity-30 hover:bg-white/5 transition-colors font-bold text-sm"
-                            >
-                                Предыдущий
-                            </button>
-                            <button 
-                                disabled={activeLessonIndex === course.lessons.length - 1 || !isCtaUnlocked}
-                                onClick={() => goToLesson(activeLessonIndex + 1, { completeCurrent: true })}
-                                className="px-6 py-2.5 rounded-xl bg-vibe-600 text-white font-bold hover:bg-vibe-500 transition-colors shadow-lg shadow-vibe-900/20 disabled:opacity-50 text-sm flex items-center gap-2"
-                            >
-                                {ctaData.buttonText ?? 'Следующий'} <ChevronRight className="w-4 h-4" />
-                            </button>
-                        </div>
+                      </div>
                     </div>
-                </div>
+                  ) : (
+                    <div key={block.key} className="space-y-3">
+                      {block.content && (
+                        <p className="whitespace-pre-line leading-relaxed">{block.content}</p>
+                      )}
+                      {block.prompt && (
+                        <div className="relative p-4 md:p-5 rounded-xl bg-[#0b1020] border border-vibe-500/30">
+                          <button
+                            type="button"
+                            onClick={() => handleCopyPrompt(block.prompt, idx)}
+                            className="absolute -top-3 right-4 text-[9px] md:text-[10px] uppercase tracking-wide px-2.5 py-1.5 rounded-md border border-white/15 text-slate-200 bg-white/5 backdrop-blur-sm hover:bg-white/10 hover:border-vibe-400/40 hover:text-white transition-colors shadow-lg shadow-black/30"
+                            style={{ cursor: 'pointer' }}
+                          >
+                            {copiedPromptBlock === idx ? 'Скопировано' : 'Скопировать'}
+                          </button>
+                          <p className="text-xs md:text-sm text-white whitespace-pre-line leading-relaxed">
+                            {block.prompt}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  )
+                )}
+              </div>
 
-                {/* Right Side: Interactive Window */}
-                <div className="w-full md:w-1/2 h-1/2 md:h-full border-t md:border-t-0 md:border-l border-white/5 bg-[#050914] z-10 shadow-2xl relative">
-                    {/* IDE Header Decoration */}
-                    <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-vibe-500/50 to-transparent"></div>
-                    {renderRightPanel()}
-                </div>
+              {examplesBlock && (
+                <div className="mt-8 p-6 rounded-2xl border border-white/10 bg-white/5 shadow-lg shadow-black/20 space-y-4">
+                  <div className="flex items-start gap-3">
+                    <div className="w-10 h-10 rounded-full bg-purple-500/15 text-purple-200 font-bold flex items-center justify-center border border-purple-500/20 text-lg">
+                      ✦
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-xs uppercase tracking-wider text-purple-200 font-semibold">Examples</p>
+                      <p className="text-2xl font-display font-semibold text-white leading-tight">
+                        {examplesBlock.title ?? 'Примеры'}
+                      </p>
+                      {examplesBlock.tip && (
+                        <p className="text-sm text-slate-300 whitespace-pre-line leading-relaxed max-w-3xl">
+                          {examplesBlock.tip}
+                        </p>
+                      )}
+                    </div>
+                  </div>
 
-            </main>
-        </div>
+                  {examplesBlock.items && examplesBlock.items.length > 0 && (
+                    <div className="space-y-3">
+                      {examplesBlock.items.map((item, idx) => {
+                        const label = (item.label ?? '').toLowerCase();
+                        const isBad = label.includes('плох');
+                        const accentClasses = isBad
+                          ? 'bg-[#0b1020] border-slate-700/40 text-slate-200'
+                          : 'bg-[#0c1a22] border-teal-500/25 text-teal-100';
+                        const badgeClasses = isBad
+                          ? 'bg-slate-700/40 text-slate-200 border border-slate-500/40'
+                          : 'bg-teal-500/20 text-teal-100 border border-teal-400/30';
+                        const noteColor = isBad ? 'text-slate-400' : 'text-teal-100/80';
+
+                        return (
+                          <div
+                            key={idx}
+                            className={`p-4 rounded-xl border ${accentClasses} space-y-2`}
+                          >
+                            <div className="flex items-center gap-2">
+                              {item.label && (
+                                <span className={`text-xs font-semibold uppercase tracking-wide px-2 py-1 rounded-full ${badgeClasses}`}>
+                                  {item.label}
+                                </span>
+                              )}
+                            </div>
+                            {item.content && (
+                              <div className="rounded-lg bg-white/5 px-3 py-2 border border-white/5 relative">
+                                <button
+                                  type="button"
+                                  onClick={() => handleCopyExample(item.content, idx)}
+                                  className="absolute top-2 right-2 text-[11px] uppercase tracking-wide px-2 py-1 rounded-md border border-white/10 text-slate-300 hover:border-vibe-400/40 hover:text-white transition-colors"
+                                  style={{ cursor: item.content ? 'pointer' : 'default' }}
+                                >
+                                  {copiedExample === idx ? 'Скопировано' : 'Копировать'}
+                                </button>
+                                <p className="text-sm text-white whitespace-pre-line leading-relaxed max-w-3xl pr-16">
+                                  {item.content}
+                                </p>
+                              </div>
+                            )}
+                            {item.notes && item.notes.length > 0 && (
+                              <ul className="space-y-1.5 text-sm leading-snug list-disc list-inside">
+                                {item.notes.map((note, noteIdx) => (
+                                  <li key={noteIdx} className={noteColor}>
+                                    {note}
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {quizBlock && (
+                <div className="mt-8 p-6 rounded-2xl border border-white/10 bg-white/5 shadow-lg shadow-black/20">
+                  <div className="flex items-start gap-3 mb-3">
+                    <div className="w-10 h-10 rounded-full bg-vibe-500/15 text-vibe-300 font-bold flex items-center justify-center border border-vibe-500/20">
+                      ?
+                    </div>
+                    <div>
+                      <p className="text-xs uppercase tracking-wider text-vibe-300 font-bold mb-1">Quiz</p>
+                      <p className="text-xl font-display text-white leading-tight">
+                        {quizBlock.title ?? 'Мини-эксперимент'}
+                      </p>
+                    </div>
+                  </div>
+                  {quizBlock.question && (
+                    <p className="text-slate-300 whitespace-pre-line leading-relaxed">{quizBlock.question}</p>
+                  )}
+                  {quizBlock.options && quizBlock.options.length > 0 && (
+                    <div className="mt-4 space-y-2">
+                      {quizBlock.options.map((option, idx) => (
+                        <button
+                          key={idx}
+                          type="button"
+                          onClick={() => handleQuizSelect(idx, option)}
+                          className={`w-full text-left px-4 py-3 rounded-xl border transition-colors ${quizAnswer === idx
+                              ? 'bg-green-500/10 border-green-400/40 text-green-100'
+                              : 'bg-[#070c18] border-white/5 text-slate-200 hover:border-vibe-500/30 hover:bg-white/5'
+                            }`}
+                          style={{ cursor: 'pointer' }}
+                        >
+                          <span className="text-sm">{option}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {quizBlock.note && (
+                    <div className="mt-4 text-xs text-slate-400 italic">Note: {quizBlock.note}</div>
+                  )}
+                </div>
+              )}
+
+              <div className="mt-12 flex justify-between items-center pt-8 border-t border-white/10">
+                <button
+                  disabled={activeLessonIndex === 0}
+                  onClick={() => goToLesson(activeLessonIndex - 1)}
+                  className="px-5 py-2.5 rounded-xl border border-white/10 text-slate-400 disabled:opacity-30 hover:bg-white/5 transition-colors font-bold text-sm"
+                >
+                  Предыдущий
+                </button>
+                <button
+                  disabled={activeLessonIndex === course.lessons.length - 1 || !isCtaUnlocked}
+                  onClick={() => goToLesson(activeLessonIndex + 1, { completeCurrent: true })}
+                  className="px-6 py-2.5 rounded-xl bg-vibe-600 text-white font-bold hover:bg-vibe-500 transition-colors shadow-lg shadow-vibe-900/20 disabled:opacity-50 text-sm flex items-center gap-2"
+                >
+                  {ctaData.buttonText ?? 'Следующий'} <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Right Side: Interactive Window */}
+          <div className="w-full md:w-1/2 h-1/2 md:h-full border-t md:border-t-0 md:border-l border-white/5 bg-[#050914] z-10 shadow-2xl relative">
+            {/* IDE Header Decoration */}
+            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-vibe-500/50 to-transparent"></div>
+            {renderRightPanel()}
+          </div>
+
+        </main>
+      </div>
     </div>
   );
 };
