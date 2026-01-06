@@ -22,6 +22,9 @@ interface BackendLesson {
   sort_order?: number | null;
   blocks?: unknown;
   unlock_rule?: unknown;
+  settings?: unknown;
+  mode?: string | null;
+  settings_mode?: string | null;
 }
 
 function mapLessonType(lessonType?: string | null): LessonType {
@@ -94,6 +97,9 @@ function mapLesson(row: BackendLesson): Lesson {
     blocks: row.blocks,
     unlock_rule: row.unlock_rule,
     videoUrl: null,
+    settings: row.settings,
+    mode: row.mode ?? null,
+    settings_mode: row.settings_mode ?? null,
   };
 }
 
