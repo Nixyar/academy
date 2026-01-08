@@ -147,11 +147,12 @@ function injectIframeRouter(html: string): string {
   return `${html}\n${script}`;
 }
 
-function extractCtaData(blocks: unknown[]): { buttonText: string | null } {
+function extractCtaData(blocks: unknown[]): { buttonText: string | null; action: string | null } {
   const extract = (block: unknown) => {
     if (block && typeof block === 'object' && (block as any).type === 'cta') {
       const buttonText = typeof (block as any).buttonText === 'string' ? ((block as any).buttonText as string) : null;
-      if (buttonText) return { buttonText };
+      const action = typeof (block as any).action === 'string' ? ((block as any).action as string) : null;
+      if (buttonText || action) return { buttonText, action };
     }
     return null;
   };
@@ -161,7 +162,7 @@ function extractCtaData(blocks: unknown[]): { buttonText: string | null } {
     if (value) return value;
   }
 
-  return { buttonText: null };
+  return { buttonText: null, action: null };
 }
 
 function describeApiError(error: unknown, fallback: string): string {
@@ -440,6 +441,8 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     return unlocked;
   }, [activeLesson.id, courseProgress]);
 
+  const lessonIdsKey = useMemo(() => course.lessons.map((lesson) => lesson.id).join('|'), [course.lessons]);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -452,25 +455,24 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
 
     (async () => {
       try {
-        const [progressData, resumeData] = await Promise.all([
-          fetchCourseProgress(course.id),
-          fetchCourseResume(course.id),
-        ]);
+        const progressData = await fetchCourseProgress(course.id);
 
         if (cancelled) return;
         syncProgress(progressData ?? {});
 
-        const resumeLessonId = resumeData?.lesson_id;
+        const resumeLessonId = progressData?.resume_lesson_id || progressData?.last_viewed_lesson_id;
         const resumeIndex = resumeLessonId
           ? course.lessons.findIndex((lesson) => lesson.id === resumeLessonId)
           : -1;
 
-        if (resumeIndex >= 0) {
+        if (resumeIndex >= 0 && resumeIndex !== activeLessonIndex) {
           setActiveLessonIndex(resumeIndex);
         }
 
-        const currentLesson = course.lessons[resumeIndex >= 0 ? resumeIndex : activeLessonIndex];
+        const currentLesson = course.lessons[resumeIndex >= 0 ? resumeIndex : 0];
         if (currentLesson) {
+          if ((progressData as any)?.course_status === 'completed') return;
+
           const status = progressData?.lessons?.[currentLesson.id]?.status;
 
           if (status !== 'completed') {
@@ -481,10 +483,12 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
             });
           }
 
-          await applyProgressPatch({
-            op: 'set_resume',
-            lessonId: currentLesson.id,
-          });
+          if (progressData?.resume_lesson_id !== currentLesson.id) {
+            await applyProgressPatch({
+              op: 'set_resume',
+              lessonId: currentLesson.id,
+            });
+          }
         }
       } catch (error) {
         console.error('Failed to load course progress', error);
@@ -496,7 +500,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [applyProgressPatch, course.id, course.lessons, syncProgress]);
+  }, [activeLessonIndex, applyProgressPatch, course.id, course.lessons, lessonIdsKey, syncProgress]);
 
   const isWorkshopLesson = useMemo(
     () => (activeLesson.lessonType ?? '').toLowerCase() === 'workshop',
@@ -631,6 +635,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
   }, [activeLesson, activeLessonProgress, evaluateUnlockRule, gateContext, resolveUnlockPlaceholders]);
 
   const ctaData = useMemo(() => extractCtaData(visibleBlocks), [visibleBlocks]);
+  const isFinishCta = useMemo(() => (ctaData.action ?? '').toLowerCase() === 'finish', [ctaData.action]);
 
   const quizBlock = useMemo(() => {
     const extract = (block: unknown) => {
@@ -893,6 +898,55 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     },
     [activeLessonIndex, applyProgressPatch, course.lessons, courseProgress?.lessons, unlockedLessonIds],
   );
+
+  const finishCourse = useCallback(async () => {
+    try {
+      const completedAt = new Date().toISOString();
+      try {
+        const updated = await patchCourseProgress(course.id, {
+          op: 'finish_course',
+          lessonId: activeLesson.id,
+          completedAt,
+        });
+        syncProgress(updated ?? {});
+        return;
+      } catch (error) {
+        const body = error instanceof ApiError ? (error.body as any) : null;
+        const unsupported =
+          body?.error === 'UNKNOWN_PATCH_OP' ||
+          (typeof body?.details === 'string' && body.details.includes('finish_course'));
+        if (!unsupported) throw error;
+      }
+
+      // Back-compat: if backend doesn't support finish_course yet, fall back to completing lessons.
+      const inProgressIds = Object.entries(courseProgress?.lessons ?? {})
+        .filter(([, value]) => (value as any)?.status === 'in_progress')
+        .map(([lessonId]) => lessonId);
+
+      for (const lessonId of inProgressIds) {
+        await applyProgressPatch({
+          op: 'lesson_status',
+          lessonId,
+          status: 'completed',
+          completedAt,
+        });
+      }
+
+      await applyProgressPatch({
+        op: 'lesson_status',
+        lessonId: activeLesson.id,
+        status: 'completed',
+        completedAt,
+      });
+
+      await applyProgressPatch({
+        op: 'set_resume',
+        lessonId: activeLesson.id,
+      });
+    } finally {
+      onBack();
+    }
+  }, [activeLesson.id, applyProgressPatch, course.id, courseProgress?.lessons, onBack, syncProgress]);
 
   const parseSseEvent = useCallback((rawEvent: string): { event: string; data: string } => {
     let eventName = 'message';
@@ -1941,8 +1995,8 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
                   Предыдущий
                 </button>
                 <button
-                  disabled={activeLessonIndex === course.lessons.length - 1 || !isCtaUnlocked}
-                  onClick={() => goToLesson(activeLessonIndex + 1, { completeCurrent: true })}
+                  disabled={(!isFinishCta && activeLessonIndex === course.lessons.length - 1) || !isCtaUnlocked}
+                  onClick={() => (isFinishCta ? finishCourse() : goToLesson(activeLessonIndex + 1, { completeCurrent: true }))}
                   className="px-6 py-2.5 rounded-xl bg-vibe-600 text-white font-bold hover:bg-vibe-500 transition-colors shadow-lg shadow-vibe-900/20 disabled:opacity-50 text-sm flex items-center gap-2"
                 >
                   {ctaData.buttonText ?? 'Следующий'} <ChevronRight className="w-4 h-4" />

@@ -18,12 +18,13 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, courses, onLogou
     const completedLessons = Object.values(lessons).filter(
       (lesson) => lesson?.status === 'completed',
     ).length;
+    const totalLessonsFromProgress = Object.keys(lessons).length;
     const started =
       Object.keys(lessons).length > 0 ||
       Boolean(progress?.resume_lesson_id) ||
       Boolean(progress?.last_viewed_lesson_id);
 
-    return { completedLessons, started };
+    return { completedLessons, totalLessonsFromProgress, started };
   };
 
   // Calculate mock stats
@@ -146,8 +147,8 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, courses, onLogou
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-12">
             {courses.map(course => {
-                const { completedLessons, started: isStarted } = getCourseProgressState(course.id);
-                const totalLessons = course.lessons.length;
+                const { completedLessons, totalLessonsFromProgress, started: isStarted } = getCourseProgressState(course.id);
+                const totalLessons = course.lessons.length || totalLessonsFromProgress;
                 const percent = totalLessons > 0 ? Math.round((completedLessons / totalLessons) * 100) : 0;
 
                 return (
