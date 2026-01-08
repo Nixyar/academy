@@ -1268,9 +1268,20 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
       }
 
       if (eventName === 'error') {
-        const message =
+        const detailsRaw = (payload as any)?.details ?? (payload as any)?.error_details ?? null;
+        const details =
+          typeof detailsRaw === 'string'
+            ? detailsRaw
+            : detailsRaw && typeof detailsRaw === 'object'
+              ? JSON.stringify(detailsRaw)
+              : null;
+        const baseMessage =
           ((payload as any)?.error ?? (payload as any)?.message ?? data) ||
           'Ошибка генерации HTML. Попробуйте ещё раз.';
+        const message =
+          details && typeof baseMessage === 'string' && baseMessage.trim()
+            ? `${baseMessage}: ${details}`
+            : baseMessage;
         const hasRenderablePayload =
           payload &&
           typeof payload === 'object' &&
@@ -1599,28 +1610,6 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
             <div className="flex-1 border-b border-white/5 relative overflow-hidden">
               {hasRenderablePreview ? (
                 <div className="absolute inset-0 flex flex-col">
-                  {Object.keys(previewWorkspace.files).length > 1 && (
-                    <div className="shrink-0 flex gap-1 px-2 py-2 bg-[#02050e] border-b border-white/5 overflow-x-auto">
-                      {Object.keys(previewWorkspace.files)
-                        .sort()
-                        .map((name) => (
-                          <button
-                            key={name}
-                            type="button"
-                            onClick={() => {
-                              void setActiveFileRemote(name);
-                            }}
-                            className={`px-2 py-1 rounded-md text-xs font-mono border transition-colors ${uiActiveFile === name
-                                ? 'bg-vibe-500/15 border-vibe-500/30 text-vibe-200'
-                                : 'bg-white/5 border-white/10 text-slate-300 hover:bg-white/10'
-                              }`}
-                            style={{ cursor: 'pointer' }}
-                          >
-                            {name}
-                          </button>
-                        ))}
-                    </div>
-                  )}
                   <iframe
                     ref={previewIframeRef}
                     key={`${activeLesson.id}-${uiActiveFile}`}
