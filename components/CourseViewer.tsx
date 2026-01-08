@@ -1658,6 +1658,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
                 <textarea
                   value={promptInput}
                   onChange={(e) => setPromptInput(e.target.value)}
+                  disabled={isLectureLesson}
                   className={`w-full h-full bg-transparent text-sm resize-none font-mono focus:outline-none pr-28 ${isWorkshopLesson ? 'text-slate-200' : 'text-slate-500'
                     }`}
                   placeholder={isLectureLesson ? '' : 'Console ready...'}
