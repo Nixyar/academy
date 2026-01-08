@@ -109,10 +109,32 @@ export async function fetchCourses(): Promise<Course[]> {
   return courses.map(mapCourse);
 }
 
-export async function fetchCourseLessons(courseId: string): Promise<Lesson[]> {
-  const lessons = await apiFetch<BackendLesson[]>(
-    `/api/rest/v1/lessons?course_id=eq.${courseId}`,
-  );
+const lessonsCache = new Map<string, Lesson[]>();
+const lessonsInFlight = new Map<string, Promise<Lesson[]>>();
 
-  return lessons.map(mapLesson);
+export async function fetchCourseLessons(courseId: string): Promise<Lesson[]> {
+  const id = String(courseId || '').trim();
+  if (!id) return [];
+
+  const cached = lessonsCache.get(id);
+  if (cached) return cached;
+
+  const inflight = lessonsInFlight.get(id);
+  if (inflight) return inflight;
+
+  const promise = (async () => {
+    try {
+      const lessons = await apiFetch<BackendLesson[]>(
+        `/api/rest/v1/lessons?course_id=eq.${id}`,
+      );
+      const mapped = lessons.map(mapLesson);
+      lessonsCache.set(id, mapped);
+      return mapped;
+    } finally {
+      lessonsInFlight.delete(id);
+    }
+  })();
+
+  lessonsInFlight.set(id, promise);
+  return promise;
 }
