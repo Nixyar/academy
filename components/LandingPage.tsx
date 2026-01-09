@@ -125,7 +125,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
           </p>
 
           <div className="flex flex-wrap justify-center gap-2 text-sm text-slate-400 mb-10">
-            {['Gemini', 'DeepSeek', 'Ollama', 'Cursor', 'VS Code'].map((tool) => (
+            {['Gemini', 'DeepSeek', 'Ollama', 'ChatGPT', 'Cursor'].map((tool) => (
                 <span
                     key={tool}
                     className="px-3 py-1 rounded-full bg-white/5 border border-white/10 transition-all duration-200 hover:bg-white/10 hover:border-vibe-400/50 hover:text-white hover:-translate-y-0.5 hover:shadow-[0_0_18px_rgba(0,243,255,0.35)]"
