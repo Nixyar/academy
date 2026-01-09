@@ -209,7 +209,20 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, courses, onLogou
                              )}
                         </div>
                         <div className="p-6">
-                            <h3 className="font-bold font-display text-xl mb-3 truncate group-hover:text-vibe-400 transition-colors">{course.title}</h3>
+                            <h3 className="font-bold font-display text-xl mb-2 truncate group-hover:text-vibe-400 transition-colors">{course.title}</h3>
+                            {course.description ? (
+                              <p
+                                className="text-slate-400 text-sm leading-relaxed mb-5"
+                                style={{
+                                  display: '-webkit-box',
+                                  WebkitLineClamp: 2,
+                                  WebkitBoxOrient: 'vertical',
+                                  overflow: 'hidden',
+                                }}
+                              >
+                                {course.description}
+                              </p>
+                            ) : null}
                             
                             {/* Progress Bar */}
                             <div className="flex items-center justify-between text-xs text-slate-400 mb-2 font-medium">
@@ -278,7 +291,20 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, courses, onLogou
                       )}
                     </div>
                     <div className="p-6">
-                      <h3 className="font-bold font-display text-xl mb-3 truncate group-hover:text-vibe-400 transition-colors">{course.title}</h3>
+                      <h3 className="font-bold font-display text-xl mb-2 truncate group-hover:text-vibe-400 transition-colors">{course.title}</h3>
+                      {course.description ? (
+                        <p
+                          className="text-slate-400 text-sm leading-relaxed mb-5"
+                          style={{
+                            display: '-webkit-box',
+                            WebkitLineClamp: 2,
+                            WebkitBoxOrient: 'vertical',
+                            overflow: 'hidden',
+                          }}
+                        >
+                          {course.description}
+                        </p>
+                      ) : null}
 
                       <button
                         onClick={isDraft ? undefined : () => onContinueCourse(course.id)}

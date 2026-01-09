@@ -2,10 +2,11 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { LandingPage } from './components/LandingPage';
 import { CourseViewer } from './components/CourseViewer';
 import { AuthModal } from './components/AuthModal';
+import { ConsentModal } from './components/ConsentModal';
 import { ProfilePage } from './components/ProfilePage';
 import { AuthCallback } from './components/AuthCallback';
 import { Course, CourseProgress, User } from './types';
-import { logout, me, refreshSession } from './services/authApi';
+import { logout, me, refreshSession, type BackendProfile } from './services/authApi';
 import { clearSupabaseStoredSession, supabase } from './services/supabaseClient';
 import { userFromProfile } from './services/userFromProfile';
 import { fetchCourseLessons, fetchCourses } from './services/coursesApi';
@@ -76,6 +77,7 @@ const App: React.FC = () => {
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
   const [bootstrapping, setBootstrapping] = useState(true);
   const [hasFetchedProfile, setHasFetchedProfile] = useState(false);
+  const [consentModalOpen, setConsentModalOpen] = useState(false);
   const [courses, setCourses] = useState<Course[]>([]);
   const [lessonsLoadingFor, setLessonsLoadingFor] = useState<string | null>(null);
   const coursesLoadedRef = useRef(false);
@@ -315,6 +317,15 @@ const App: React.FC = () => {
     navigateToProfile();
   };
 
+  useEffect(() => {
+    if (!user) {
+      setConsentModalOpen(false);
+      return;
+    }
+    const needsConsent = !user.termsAccepted || !user.privacyAccepted;
+    setConsentModalOpen(needsConsent);
+  }, [user?.id, user?.termsAccepted, user?.privacyAccepted]);
+
   const handleLogout = async () => {
     try {
       await logout();
@@ -329,6 +340,21 @@ const App: React.FC = () => {
     setHasFetchedProfile(true);
     navigateToLanding();
   };
+
+  const applyUpdatedProfile = useCallback((profile: BackendProfile) => {
+    const updatedUser = userFromProfile(profile);
+    setUser((prev) =>
+      prev
+        ? {
+          ...prev,
+          ...updatedUser,
+          progress: prev.progress,
+          completedCourses: prev.completedCourses,
+        }
+        : updatedUser,
+    );
+    setConsentModalOpen(false);
+  }, []);
 
   const handleCourseProgressChange = useCallback(
     (courseId: string, progress: CourseProgress) => {
@@ -430,6 +456,17 @@ const App: React.FC = () => {
         onAuthenticated={handleAuthenticated}
         initialMode={authMode}
       />
+      {user ? (
+        <ConsentModal
+          isOpen={consentModalOpen}
+          termsAccepted={Boolean(user.termsAccepted)}
+          privacyAccepted={Boolean(user.privacyAccepted)}
+          onAccepted={applyUpdatedProfile}
+          onLogout={() => {
+            void handleLogout();
+          }}
+        />
+      ) : null}
 
       {currentView === 'landing' && (
         <LandingPage
