@@ -6,6 +6,7 @@ export interface Course {
   coverUrl: string | null;
   access?: string | null;
   status?: string | null;
+  label?: string | string[] | null;
   sortOrder?: number | null;
   isFree: boolean;
   lessons: Lesson[];
@@ -48,6 +49,10 @@ export interface Lesson {
   blocks?: unknown;
   initialCode?: string; // For code gen lessons
   unlock_rule?: unknown; // unlock conditions from backend (raw shape)
+  // Backend-controlled behavior flags (e.g. edit/add_page/create)
+  settings?: unknown;
+  mode?: string | null;
+  settings_mode?: string | null;
 }
 
 export interface User {
@@ -59,6 +64,8 @@ export interface User {
   plan?: string;
   dailyLimit?: number;
   dailyUsed?: number;
+  termsAccepted?: boolean;
+  privacyAccepted?: boolean;
   progress: Record<string, CourseProgress>; // courseId -> progress object
   completedCourses: string[];
 }
