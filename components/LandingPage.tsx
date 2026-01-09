@@ -247,7 +247,12 @@ export const LandingPage: React.FC<LandingPageProps> = ({
 
       <footer className="py-12 border-t border-white/5 bg-[#02050e]">
         <div className="max-w-7xl mx-auto px-4 text-center">
-          <p className="text-slate-600 text-sm">© 2025-2026 VibeCoderAi</p>
+          <p className="text-slate-600 text-sm mt-2">
+            <a href="/offer.pdf" target="_blank" rel="noopener noreferrer" className="hover:text-slate-400 transition-colors">
+              Публичная оферта
+            </a>
+          </p>
+          <p className="text-slate-600 text-sm mt-2">© 2025-2026 VibeCoderAi</p>
         </div>
       </footer>
     </div>
