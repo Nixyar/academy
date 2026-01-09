@@ -11,6 +11,14 @@ export interface BackendProfile {
   daily_reset_at: string;
   created_at: string;
   updated_at: string;
+  terms_accepted?: boolean | null;
+  privacy_accepted?: boolean | null;
+  terms_version?: string | null;
+  privacy_version?: string | null;
+  terms_accepted_at?: string | null;
+  privacy_accepted_at?: string | null;
+  consent_ip?: string | null;
+  consent_user_agent?: string | null;
 }
 
 export async function setSession(accessToken: string, refreshToken: string): Promise<void> {
@@ -30,6 +38,16 @@ export async function refreshSession(): Promise<void> {
 
 export async function me(): Promise<BackendProfile> {
   return apiFetch<BackendProfile>('/api/me', { method: 'GET' });
+}
+
+export async function acceptDocuments(input: {
+  termsAccepted?: boolean;
+  privacyAccepted?: boolean;
+}): Promise<BackendProfile> {
+  return apiFetch<BackendProfile>('/api/me/consent', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
 }
 
 export async function loginWithEmail(email: string, password: string): Promise<void> {
