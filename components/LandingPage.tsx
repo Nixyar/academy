@@ -254,6 +254,9 @@ export const LandingPage: React.FC<LandingPageProps> = ({
             <a href="/agreement.pdf" target="_blank" rel="noopener noreferrer" className="hover:text-slate-400 transition-colors">
               Пользовательское соглашение
             </a>
+            <a href="/privacy.pdf" target="_blank" rel="noopener noreferrer" className="hover:text-slate-400 transition-colors">
+              Политика конфиденциальности
+            </a>
           </div>
           <p className="text-slate-600 text-sm mt-2">© 2025-2026 VibeCoderAi</p>
         </div>
