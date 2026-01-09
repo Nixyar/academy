@@ -425,40 +425,6 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     [activeLesson.id],
   );
 
-  const resolveUnlockPlaceholders = useCallback(
-    (rule: any): any => {
-      const substituteValue = (value: unknown) => {
-        if (typeof value !== 'string') return value;
-        const normalized = value.trim();
-        const stripSigils = normalized
-          .replace(/^\$\{?/, '')
-          .replace(/\}?$/, '');
-        const map: Record<string, string> = {
-          lessonId: activeLesson.id,
-          'lesson.id': activeLesson.id,
-          currentLessonId: activeLesson.id,
-          lesson_id: activeLesson.id,
-        };
-        return map[normalized] ?? map[stripSigils] ?? normalized;
-      };
-
-      if (Array.isArray(rule)) {
-        return rule.map((item) => resolveUnlockPlaceholders(item));
-      }
-
-      if (rule && typeof rule === 'object') {
-        const next: any = { ...rule };
-        if (next.allOf) next.allOf = resolveUnlockPlaceholders(next.allOf);
-        if (next.anyOf) next.anyOf = resolveUnlockPlaceholders(next.anyOf);
-        if ('value' in next) next.value = substituteValue(next.value);
-        return next;
-      }
-
-      return rule;
-    },
-    [activeLesson.id],
-  );
-
   const unlockedLessonIds = useMemo(() => {
     const unlocked = new Set<string>();
     unlocked.add(activeLesson.id);
