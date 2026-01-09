@@ -6,6 +6,7 @@ export interface Course {
   coverUrl: string | null;
   access?: string | null;
   status?: string | null;
+  label?: string | null;
   sortOrder?: number | null;
   isFree: boolean;
   lessons: Lesson[];

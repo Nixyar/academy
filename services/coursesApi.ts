@@ -9,6 +9,8 @@ interface BackendCourse {
   cover_url: string | null;
   access?: string | null;
   status?: string | null;
+  label?: string | null;
+  labels?: string[] | null;
   sort_order?: number | null;
 }
 
@@ -68,6 +70,11 @@ function extractDescription(blocks: unknown): string {
 
 function mapCourse(row: BackendCourse): Course {
   const access = row.access?.toLowerCase() ?? 'free';
+  const label =
+    (typeof row.label === 'string' && row.label.trim() ? row.label.trim() : null) ??
+    (Array.isArray(row.labels)
+      ? (row.labels.find((value) => typeof value === 'string' && value.trim())?.trim() ?? null)
+      : null);
 
   return {
     id: row.id,
@@ -77,6 +84,7 @@ function mapCourse(row: BackendCourse): Course {
     coverUrl: row.cover_url ?? null,
     access: row.access,
     status: row.status,
+    label,
     sortOrder: row.sort_order ?? null,
     isFree: access !== 'pro',
     lessons: [],
