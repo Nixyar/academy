@@ -27,6 +27,33 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, courses, onLogou
     return { completedLessons, totalLessonsFromProgress, started };
   };
 
+  const getCourseLabels = (course: Course): string[] => {
+    const raw = (course as any)?.label;
+    if (Array.isArray(raw)) return raw.filter((x) => typeof x === 'string').map((x) => x.trim()).filter(Boolean);
+    if (typeof raw === 'string') {
+      const trimmed = raw.trim();
+      if (!trimmed) return [];
+      if (trimmed.startsWith('[')) {
+        try {
+          const parsed = JSON.parse(trimmed);
+          if (Array.isArray(parsed)) {
+            return parsed.filter((x) => typeof x === 'string').map((x) => x.trim()).filter(Boolean);
+          }
+        } catch {
+          // ignore
+        }
+      }
+      if (trimmed.includes(',')) return trimmed.split(',').map((x) => x.trim()).filter(Boolean);
+      return [trimmed];
+    }
+    return [];
+  };
+
+  const isProLabel = (label: string) => label.trim().toLowerCase() === 'pro';
+
+  const startedCourses = courses.filter((course) => getCourseProgressState(course.id).started);
+  const notStartedCourses = courses.filter((course) => !getCourseProgressState(course.id).started);
+
   // Calculate mock stats
   const coursesInProgress = courses.reduce((count, course) => {
     const { started } = getCourseProgressState(course.id);
@@ -145,25 +172,40 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, courses, onLogou
             Продолжить обучение
         </h2>
 
+        {startedCourses.length === 0 && (
+          <div className="bg-glass border border-white/5 rounded-2xl p-6 text-slate-300 mb-12">
+            Вы ещё не начали ни одного курса.
+          </div>
+        )}
+
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-12">
-            {courses.map(course => {
+            {startedCourses.map(course => {
                 const { completedLessons, totalLessonsFromProgress, started: isStarted } = getCourseProgressState(course.id);
                 const totalLessons = course.lessons.length || totalLessonsFromProgress;
                 const percent = totalLessons > 0 ? Math.round((completedLessons / totalLessons) * 100) : 0;
+                const isDraft = (course.status ?? '').toLowerCase() === 'draft';
+                const labels = getCourseLabels(course);
 
                 return (
                     <div key={course.id} className="group bg-glass border border-white/5 rounded-2xl overflow-hidden hover:border-vibe-500/30 transition-all hover:-translate-y-1 hover:shadow-2xl hover:shadow-vibe-900/10">
                         <div className="h-40 bg-slate-800 relative overflow-hidden">
                              <img src={course.coverUrl || 'https://placehold.co/600x400/0b1120/FFFFFF?text=Course'} alt="" className="w-full h-full object-cover opacity-60 group-hover:opacity-80 transition-opacity duration-500 group-hover:scale-105" />
                              <div className="absolute inset-0 bg-gradient-to-t from-[#030712] via-[#030712]/50 to-transparent"></div>
-                             {user.isSubscribed || course.isFree ? (
-                                <div className="absolute top-3 right-3 bg-green-500/20 backdrop-blur-md text-green-400 text-[10px] font-bold px-2 py-1 rounded border border-green-500/20">
-                                    ДОСТУПНО
-                                </div>
-                             ) : (
-                                <div className="absolute top-3 right-3 bg-red-500/20 backdrop-blur-md text-red-400 text-[10px] font-bold px-2 py-1 rounded border border-red-500/20">
-                                    ЗАКРЫТО
-                                </div>
+                             {labels.length > 0 && (
+                               <div className="absolute top-3 right-3 flex flex-col gap-1 items-end">
+                                 {labels.map((label) => (
+                                   <div
+                                     key={label}
+                                     className={`backdrop-blur-md text-[10px] font-bold px-2 py-1 rounded border
+                                       ${isProLabel(label)
+                                         ? 'bg-purple-500/20 text-purple-300 border-purple-500/20'
+                                         : 'bg-green-500/20 text-green-400 border-green-500/20'}
+                                     `}
+                                   >
+                                     {label}
+                                   </div>
+                                 ))}
+                               </div>
                              )}
                         </div>
                         <div className="p-6">
@@ -182,21 +224,81 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, courses, onLogou
                             </div>
 
                             <button 
-                                onClick={() => onContinueCourse(course.id)}
+                                onClick={isDraft ? undefined : () => onContinueCourse(course.id)}
+                                disabled={isDraft}
                                 className={`w-full py-3.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all
-                                    ${isStarted 
-                                        ? 'bg-white/5 hover:bg-white/10 text-white border border-white/10' 
-                                        : 'bg-gradient-to-r from-vibe-600 to-purple-600 hover:from-vibe-500 hover:to-purple-500 text-white shadow-lg shadow-vibe-900/20'}
+                                    ${isDraft
+                                        ? 'bg-white/5 text-slate-500 border border-white/10 cursor-not-allowed opacity-70'
+                                        : isStarted 
+                                            ? 'bg-white/5 hover:bg-white/10 text-white border border-white/10' 
+                                            : 'bg-gradient-to-r from-vibe-600 to-purple-600 hover:from-vibe-500 hover:to-purple-500 text-white shadow-lg shadow-vibe-900/20'}
                                 `}
                             >
-                                {isStarted ? 'Продолжить' : 'Начать курс'}
-                                {isStarted ? <ChevronRight className="w-4 h-4" /> : <Play className="w-4 h-4 fill-current" />}
+                                {isDraft ? 'Скоро' : isStarted ? 'Продолжить' : 'Начать курс'}
+                                {isDraft ? null : isStarted ? <ChevronRight className="w-4 h-4" /> : <Play className="w-4 h-4 fill-current" />}
                             </button>
                         </div>
                     </div>
                 )
             })}
         </div>
+
+        {notStartedCourses.length > 0 && (
+          <>
+            <h2 className="text-2xl font-bold font-display mb-6 flex items-center gap-2">
+              <BookOpen className="w-6 h-6 text-vibe-400" />
+              Начать обучение
+            </h2>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-12">
+              {notStartedCourses.map(course => {
+                const isDraft = (course.status ?? '').toLowerCase() === 'draft';
+                const labels = getCourseLabels(course);
+
+                return (
+                  <div key={course.id} className="group bg-glass border border-white/5 rounded-2xl overflow-hidden hover:border-vibe-500/30 transition-all hover:-translate-y-1 hover:shadow-2xl hover:shadow-vibe-900/10">
+                    <div className="h-40 bg-slate-800 relative overflow-hidden">
+                      <img src={course.coverUrl || 'https://placehold.co/600x400/0b1120/FFFFFF?text=Course'} alt="" className="w-full h-full object-cover opacity-60 group-hover:opacity-80 transition-opacity duration-500 group-hover:scale-105" />
+                      <div className="absolute inset-0 bg-gradient-to-t from-[#030712] via-[#030712]/50 to-transparent"></div>
+                      {labels.length > 0 && (
+                        <div className="absolute top-3 right-3 flex flex-col gap-1 items-end">
+                          {labels.map((label) => (
+                            <div
+                              key={label}
+                              className={`backdrop-blur-md text-[10px] font-bold px-2 py-1 rounded border
+                                ${isProLabel(label)
+                                  ? 'bg-purple-500/20 text-purple-300 border-purple-500/20'
+                                  : 'bg-green-500/20 text-green-400 border-green-500/20'}
+                              `}
+                            >
+                              {label}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <div className="p-6">
+                      <h3 className="font-bold font-display text-xl mb-3 truncate group-hover:text-vibe-400 transition-colors">{course.title}</h3>
+
+                      <button
+                        onClick={isDraft ? undefined : () => onContinueCourse(course.id)}
+                        disabled={isDraft}
+                        className={`w-full py-3.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all
+                          ${isDraft
+                            ? 'bg-white/5 text-slate-500 border border-white/10 cursor-not-allowed opacity-70'
+                            : 'bg-gradient-to-r from-vibe-600 to-purple-600 hover:from-vibe-500 hover:to-purple-500 text-white shadow-lg shadow-vibe-900/20'}
+                        `}
+                      >
+                        {isDraft ? 'Скоро' : 'Начать курс'}
+                        {isDraft ? null : <Play className="w-4 h-4 fill-current" />}
+                      </button>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </>
+        )}
 
         <div className="border-t border-white/5 pt-6 mt-2 flex justify-center">
             <div className="flex items-center gap-3 text-slate-400 text-sm font-medium">
