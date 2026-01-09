@@ -2,10 +2,11 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { LandingPage } from './components/LandingPage';
 import { CourseViewer } from './components/CourseViewer';
 import { AuthModal } from './components/AuthModal';
+import { ConsentModal } from './components/ConsentModal';
 import { ProfilePage } from './components/ProfilePage';
 import { AuthCallback } from './components/AuthCallback';
 import { Course, CourseProgress, User } from './types';
-import { logout, me, refreshSession } from './services/authApi';
+import { logout, me, refreshSession, type BackendProfile } from './services/authApi';
 import { clearSupabaseStoredSession, supabase } from './services/supabaseClient';
 import { userFromProfile } from './services/userFromProfile';
 import { fetchCourseLessons, fetchCourses } from './services/coursesApi';
@@ -55,7 +56,7 @@ const OrbitLoader: React.FC<{ label?: string }> = ({ label }) => (
       <div className="orbit-inner" />
       <div className="orbit-outer" />
     </div>
-    {label ? <div className="text-slate-300 text-sm">{label}</div> : null}
+    {label ? <div className="text-slate-300 text-sm animate-pulse">{label}</div> : null}
   </div>
 );
 
@@ -64,20 +65,19 @@ const App: React.FC = () => {
   const [locationPath, setLocationPath] = useState(() => window.location.pathname);
 
   const [route, setRoute] = useState<RouteState>(initialRoute);
-  const [currentView, setCurrentView] = useState<View>(
-    initialRoute.view === 'course' ? 'landing' : initialRoute.view,
-  );
+  const [currentView, setCurrentView] = useState<View>(initialRoute.view);
   const [selectedCourseId, setSelectedCourseId] = useState<string | null>(null);
   const [pendingCourseSlug, setPendingCourseSlug] = useState<string | null>(initialRoute.courseSlug);
   const isAuthCallbackPath =
     locationPath === '/auth/callback' || locationPath.startsWith('/auth/callback/');
-  
+
   // Auth State
   const [user, setUser] = useState<User | null>(null);
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
   const [bootstrapping, setBootstrapping] = useState(true);
   const [hasFetchedProfile, setHasFetchedProfile] = useState(false);
+  const [consentModalOpen, setConsentModalOpen] = useState(false);
   const [courses, setCourses] = useState<Course[]>([]);
   const [lessonsLoadingFor, setLessonsLoadingFor] = useState<string | null>(null);
   const coursesLoadedRef = useRef(false);
@@ -189,8 +189,44 @@ const App: React.FC = () => {
           // Ignore missing/expired sessions; we'll handle it via /me below
         }
         const profile = await me();
-        setUser(userFromProfile(profile));
+        const authedUser = userFromProfile(profile);
+        setUser(authedUser);
         setHasFetchedProfile(true);
+
+        // If we are on a course route, let's pre-fetch its progress to avoid jumping
+        const currentRoute = normalizeRoute(parseRouteFromLocation());
+        if (currentRoute.view === 'course' && currentRoute.courseSlug) {
+          // We need courses to resolve the slug, but they might not be loaded yet.
+          // Let's load courses first if they aren't.
+          let currentCourses = courses;
+          if (currentCourses.length === 0) {
+            try {
+              currentCourses = await fetchCourses();
+              setCourses(currentCourses);
+              coursesLoadedRef.current = true;
+            } catch (err) {
+              console.error('Failed to load courses during bootstrap', err);
+            }
+          }
+
+          const course = currentCourses.find(c => c.slug === currentRoute.courseSlug || c.id === currentRoute.courseSlug);
+          if (course) {
+            try {
+              const [progressMap, lessons] = await Promise.all([
+                fetchCoursesProgress([course.id]),
+                fetchCourseLessons(course.id)
+              ]);
+
+              setCourses(prev => prev.map(c => c.id === course.id ? { ...c, lessons } : c));
+              setUser(prev => prev ? {
+                ...prev,
+                progress: { ...(prev.progress ?? {}), ...progressMap }
+              } : prev);
+            } catch (err) {
+              console.error('Failed to pre-fetch course data', err);
+            }
+          }
+        }
       } catch {
         setUser(null);
         setHasFetchedProfile(true);
@@ -222,9 +258,9 @@ const App: React.FC = () => {
         setUser((prev) =>
           prev
             ? {
-                ...prev,
-                progress: { ...(prev.progress ?? {}), ...progressMap },
-              }
+              ...prev,
+              progress: { ...(prev.progress ?? {}), ...progressMap },
+            }
             : prev,
         );
       } catch (error) {
@@ -281,6 +317,15 @@ const App: React.FC = () => {
     navigateToProfile();
   };
 
+  useEffect(() => {
+    if (!user) {
+      setConsentModalOpen(false);
+      return;
+    }
+    const needsConsent = !user.termsAccepted || !user.privacyAccepted;
+    setConsentModalOpen(needsConsent);
+  }, [user?.id, user?.termsAccepted, user?.privacyAccepted]);
+
   const handleLogout = async () => {
     try {
       await logout();
@@ -296,14 +341,29 @@ const App: React.FC = () => {
     navigateToLanding();
   };
 
+  const applyUpdatedProfile = useCallback((profile: BackendProfile) => {
+    const updatedUser = userFromProfile(profile);
+    setUser((prev) =>
+      prev
+        ? {
+          ...prev,
+          ...updatedUser,
+          progress: prev.progress,
+          completedCourses: prev.completedCourses,
+        }
+        : updatedUser,
+    );
+    setConsentModalOpen(false);
+  }, []);
+
   const handleCourseProgressChange = useCallback(
     (courseId: string, progress: CourseProgress) => {
       setUser((prev) =>
         prev
           ? {
-              ...prev,
-              progress: { ...(prev.progress ?? {}), [courseId]: progress },
-            }
+            ...prev,
+            progress: { ...(prev.progress ?? {}), [courseId]: progress },
+          }
           : prev,
       );
     },
@@ -355,8 +415,8 @@ const App: React.FC = () => {
 
   const handleSubscribe = () => {
     if (!user) {
-        handleOpenAuth('register');
-        return;
+      handleOpenAuth('register');
+      return;
     }
     const confirm = window.confirm("Оформить подписку за 1499₽ в месяц?");
     if (confirm) {
@@ -380,28 +440,39 @@ const App: React.FC = () => {
     );
   }
 
-  if (bootstrapping && currentView === 'profile') {
+  if (bootstrapping && (currentView === 'profile' || currentView === 'course')) {
     return (
       <div className="min-h-screen bg-void text-white flex items-center justify-center">
-        <OrbitLoader label="Загрузка" />
+        <OrbitLoader label="Вайбкодим загрузку" />
       </div>
     );
   }
 
   return (
     <div className="font-sans antialiased text-slate-900">
-      <AuthModal 
-        isOpen={authModalOpen} 
+      <AuthModal
+        isOpen={authModalOpen}
         onClose={() => setAuthModalOpen(false)}
         onAuthenticated={handleAuthenticated}
         initialMode={authMode}
       />
+      {user ? (
+        <ConsentModal
+          isOpen={consentModalOpen}
+          termsAccepted={Boolean(user.termsAccepted)}
+          privacyAccepted={Boolean(user.privacyAccepted)}
+          onAccepted={applyUpdatedProfile}
+          onLogout={() => {
+            void handleLogout();
+          }}
+        />
+      ) : null}
 
       {currentView === 'landing' && (
-        <LandingPage 
-          courses={courses} 
+        <LandingPage
+          courses={courses}
           user={user}
-          onSelectCourse={handleSelectCourse} 
+          onSelectCourse={handleSelectCourse}
           onSubscribe={handleSubscribe}
           onOpenAuth={handleOpenAuth}
           onGoToProfile={navigateToProfile}
@@ -409,15 +480,15 @@ const App: React.FC = () => {
       )}
 
       {currentView === 'profile' && user && (
-          <ProfilePage 
-            user={user}
-            courses={courses}
-            onLogout={handleLogout}
-            onContinueCourse={(id) => {
-                void handleSelectCourse(id);
-            }}
-            onSubscribe={handleSubscribe}
-          />
+        <ProfilePage
+          user={user}
+          courses={courses}
+          onLogout={handleLogout}
+          onContinueCourse={(id) => {
+            void handleSelectCourse(id);
+          }}
+          onSubscribe={handleSubscribe}
+        />
       )}
 
       {currentView === 'course' && user && (
@@ -426,8 +497,8 @@ const App: React.FC = () => {
             <OrbitLoader label="Загружаем уроки" />
           </div>
         ) : activeCourse && activeCourse.lessons.length > 0 ? (
-          <CourseViewer 
-            course={activeCourse} 
+          <CourseViewer
+            course={activeCourse}
             onBack={navigateToProfile}
             isSubscribed={user.isSubscribed}
             initialProgress={user.progress?.[activeCourse.id]}

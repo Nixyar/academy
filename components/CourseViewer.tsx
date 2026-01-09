@@ -4,7 +4,7 @@ import { ImageAnalyzer } from './ImageAnalyzer';
 import { ImageEditor } from './ImageEditor';
 import { FileText, Menu, X, ChevronLeft, ChevronRight, Send, Info } from 'lucide-react';
 import { fetchCourseProgress, fetchCourseResume, patchCourseProgress } from '../services/progressApi';
-import { apiFetch } from '../services/apiClient';
+import { ApiError, apiFetch } from '../services/apiClient';
 
 const IFRAME_BASE_STYLES = `
   :root { color-scheme: dark; }
@@ -21,6 +21,182 @@ const IFRAME_BASE_STYLES = `
   img { max-width: 100%; display: block; }
 `;
 
+type Workspace = {
+  files: Record<string, string>;
+  activeFile: string;
+  source: 'files' | 'html' | 'empty';
+};
+
+// A) Normalize workspace coming from backend (or legacy html-only progress).
+function getWorkspace(progress: any): Workspace {
+  const result = progress?.result;
+
+  if (result?.files && typeof result.files === 'object' && !Array.isArray(result.files)) {
+    const files: Record<string, string> = {};
+    Object.entries(result.files as Record<string, unknown>).forEach(([key, value]) => {
+      if (typeof value === 'string') files[key] = value;
+    });
+
+    const desiredActive = typeof result.active_file === 'string' ? (result.active_file as string) : 'index.html';
+    const hasIndex = Object.prototype.hasOwnProperty.call(files, 'index.html');
+    const fallbackActive = hasIndex ? 'index.html' : Object.keys(files)[0] ?? 'index.html';
+    const hasDesired = Object.prototype.hasOwnProperty.call(files, desiredActive);
+    const activeFile = hasDesired ? desiredActive : fallbackActive;
+
+    return {
+      files: Object.keys(files).length > 0 ? files : { 'index.html': '' },
+      activeFile,
+      source: 'files',
+    };
+  }
+
+  if (typeof result?.html === 'string') {
+    return { files: { 'index.html': result.html as string }, activeFile: 'index.html', source: 'html' };
+  }
+
+  if (typeof progress?.result_html === 'string') {
+    return { files: { 'index.html': progress.result_html as string }, activeFile: 'index.html', source: 'html' };
+  }
+
+  return { files: { 'index.html': '' }, activeFile: 'index.html', source: 'empty' };
+}
+
+function decorateHtmlForPreview(rawHtml: string, extraCss: string | null): string {
+  const raw = String(rawHtml ?? '').trim();
+  const stylePieces = [IFRAME_BASE_STYLES];
+  if (extraCss && extraCss.trim() && !raw.includes(extraCss)) stylePieces.push(extraCss);
+  const styleTag = `<style>${stylePieces.join('\n')}</style>`;
+  const tailwindScriptTag = `<script src="https://cdn.tailwindcss.com"></script>`;
+  const headInjection = `${tailwindScriptTag}${styleTag}`;
+
+  const ensureHead = (html: string) => {
+    if (/<head[^>]*>/i.test(html)) {
+      return html.replace(/<head[^>]*>/i, (match) => `${match}${headInjection}`);
+    }
+    if (/<html[^>]*>/i.test(html)) {
+      return html.replace(/<html[^>]*>/i, (match) => `${match}<head>${headInjection}</head>`);
+    }
+    return `${headInjection}\n${html}`;
+  };
+
+  if (!raw) {
+    return `<!doctype html>
+<html>
+<head>${styleTag}</head>
+<body></body>
+</html>`;
+  }
+
+  const withHead = ensureHead(raw);
+  const hasBodyTag = /<body[^>]*>/i.test(withHead);
+  if (hasBodyTag) return `<!doctype html>\n${withHead}`;
+
+  return `<!doctype html>
+<html>
+<head>${styleTag}</head>
+<body>
+${withHead}
+</body>
+</html>`;
+}
+
+function normalizeFileHref(href: string): string {
+  const trimmed = String(href ?? '').trim();
+  return trimmed.replace(/^\.?\//, '').split('?')[0].split('#')[0];
+}
+
+// E) Iframe navigation: intercept <a href="*.html"> and ask parent to switch active_file.
+function injectIframeRouter(html: string): string {
+  const script = `<script>
+(function () {
+  try {
+    if (window.__VIBE_IFRAME_ROUTER_INSTALLED) return;
+    window.__VIBE_IFRAME_ROUTER_INSTALLED = true;
+  } catch {}
+
+  document.addEventListener('click', function (event) {
+    var target = event && event.target;
+    if (!target || !target.closest) return;
+    var link = target.closest('a');
+    if (!link) return;
+    var href = (link.getAttribute('href') || '').trim();
+    if (!href) return;
+    if (href.charAt(0) === '#') return;
+    if (/^(mailto:|tel:)/i.test(href)) return;
+    if (/^javascript:/i.test(href)) { event.preventDefault(); return; }
+
+    var isHtml = /\\.html(\\?|#|$)/i.test(href);
+    if (isHtml) {
+      var file = href.replace(/^\\.\\//, '').split('?')[0].split('#')[0];
+      if (!file) return;
+      event.preventDefault();
+      try { window.parent.postMessage({ type: 'NAVIGATE_FILE', file: file }, '*'); } catch {}
+      return;
+    }
+
+    // Prevent the preview iframe from navigating away (e.g. to app routes like /courses/...).
+    event.preventDefault();
+    try { window.open(href, '_blank', 'noopener,noreferrer'); } catch {}
+  }, true);
+})();
+</script>`;
+
+  if (/<\/body\s*>/i.test(html)) {
+    return html.replace(/<\/body\s*>/i, `${script}</body>`);
+  }
+  return `${html}\n${script}`;
+}
+
+function extractCtaData(blocks: unknown[]): { buttonText: string | null; action: string | null } {
+  const extract = (block: unknown) => {
+    if (block && typeof block === 'object' && (block as any).type === 'cta') {
+      const buttonText = typeof (block as any).buttonText === 'string' ? ((block as any).buttonText as string) : null;
+      const action = typeof (block as any).action === 'string' ? ((block as any).action as string) : null;
+      if (buttonText || action) return { buttonText, action };
+    }
+    return null;
+  };
+
+  for (const block of blocks) {
+    const value = extract(block);
+    if (value) return value;
+  }
+
+  return { buttonText: null, action: null };
+}
+
+function describeApiError(error: unknown, fallback: string): string {
+  if (error instanceof ApiError) {
+    const body = error.body as any;
+    const fromBody = body?.error || body?.message;
+    return typeof fromBody === 'string' && fromBody.trim() ? fromBody : fallback;
+  }
+  if (error instanceof Error) return error.message || fallback;
+  return fallback;
+}
+
+function getLessonMode(lesson: any): 'edit' | 'add_page' | 'create' {
+  const rawSettings = lesson?.settings;
+  let settings: any = rawSettings;
+  if (typeof rawSettings === 'string') {
+    try {
+      settings = JSON.parse(rawSettings);
+    } catch {
+      settings = null;
+    }
+  }
+
+  const modeRaw =
+    (settings && typeof settings === 'object' && typeof settings.mode === 'string' ? settings.mode : null) ??
+    (typeof lesson?.mode === 'string' ? lesson.mode : null) ??
+    (typeof lesson?.settings_mode === 'string' ? lesson.settings_mode : null);
+
+  const normalized = typeof modeRaw === 'string' ? modeRaw.trim().toLowerCase() : '';
+  if (normalized === 'edit') return 'edit';
+  if (normalized === 'add_page' || normalized === 'add-page' || normalized === 'add page') return 'add_page';
+  return 'create';
+}
+
 interface CourseViewerProps {
   course: Course;
   onBack: () => void;
@@ -28,6 +204,14 @@ interface CourseViewerProps {
   initialProgress?: CourseProgress;
   onProgressChange?: (courseId: string, progress: CourseProgress) => void;
 }
+
+// BOLT ⚡: This function is pure and does not depend on component state.
+// By defining it outside the component, we prevent it from being re-created on every render,
+// which is a micro-optimization that reduces memory allocation and garbage collection pressure.
+const getValueByPath = (source: unknown, path: string): unknown => {
+  if (!path) return undefined;
+  return path.split('.').reduce((acc: any, key) => (acc && typeof acc === 'object' ? acc[key] : undefined), source);
+};
 
 export const CourseViewer: React.FC<CourseViewerProps> = ({
   course,
@@ -38,8 +222,16 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
 }) => {
   const apiBaseUrl =
     (import.meta as any).env?.DEV === true ? '' : (import.meta as any).env?.VITE_API_BASE_URL ?? '';
-  const [activeLessonIndex, setActiveLessonIndex] = useState(0);
+  const [activeLessonIndex, setActiveLessonIndex] = useState(() => {
+    const resumeId = initialProgress?.resume_lesson_id || initialProgress?.last_viewed_lesson_id;
+    if (resumeId) {
+      const idx = course.lessons.findIndex((l) => l.id === resumeId);
+      if (idx !== -1) return idx;
+    }
+    return 0;
+  });
   const activeLesson = course.lessons[activeLessonIndex];
+  const activeLessonMode = useMemo(() => getLessonMode(activeLesson), [activeLesson]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [quizAnswer, setQuizAnswer] = useState<number | null>(null);
   const [copiedExample, setCopiedExample] = useState<number | null>(null);
@@ -54,14 +246,17 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
   const [llmCss, setLlmCss] = useState<string | null>(null);
   const [llmSections, setLlmSections] = useState<Record<string, string>>({});
   const [llmSectionOrder, setLlmSectionOrder] = useState<string[]>([]);
+  const [llmStatusText, setLlmStatusText] = useState<string | null>(null);
   const llmCssRef = useRef<string | null>(null);
   const llmSectionsRef = useRef<Record<string, string>>({});
   const llmSectionOrderRef = useRef<string[]>([]);
   const llmOutlineRef = useRef<unknown>(null);
   const streamControllerRef = useRef<AbortController | null>(null);
   const streamingJobIdRef = useRef<string | null>(null);
+  const streamLastEventAtRef = useRef<number>(0);
   const lastLessonIdRef = useRef<string>(course.lessons[activeLessonIndex]?.id ?? '');
   const fetchedResultJobIdRef = useRef<string | null>(null);
+  const previewIframeRef = useRef<HTMLIFrameElement | null>(null);
   const rawActiveJob = (courseProgress as any)?.active_job;
   const rawActiveJobStatus =
     (courseProgress as any)?.active_job_status ??
@@ -72,25 +267,33 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
       ? (courseProgress as any).active_job_id
       : rawActiveJob && typeof rawActiveJob === 'object'
         ? (typeof (rawActiveJob as any).jobId === 'string'
-            ? (rawActiveJob as any).jobId
-            : typeof (rawActiveJob as any).job_id === 'string'
-              ? (rawActiveJob as any).job_id
-              : null)
+          ? (rawActiveJob as any).jobId
+          : typeof (rawActiveJob as any).job_id === 'string'
+            ? (rawActiveJob as any).job_id
+            : null)
         : null;
   const activeJobId = typeof rawActiveJobId === 'string' ? rawActiveJobId : null;
   const rawActiveJobPrompt =
     (courseProgress as any)?.active_job_prompt ??
     (rawActiveJob && typeof rawActiveJob === 'object' ? (rawActiveJob as any).prompt : null);
   const activeJobPrompt = typeof rawActiveJobPrompt === 'string' ? rawActiveJobPrompt : '';
+  const rawActiveJobError =
+    (rawActiveJob && typeof rawActiveJob === 'object' ? (rawActiveJob as any).error : null) ??
+    (rawActiveJob && typeof rawActiveJob === 'object' ? (rawActiveJob as any).code : null);
+  const activeJobError = typeof rawActiveJobError === 'string' ? rawActiveJobError : null;
+  const rawActiveJobErrorDetails =
+    (rawActiveJob && typeof rawActiveJob === 'object' ? (rawActiveJob as any).error_details : null) ??
+    (rawActiveJob && typeof rawActiveJob === 'object' ? (rawActiveJob as any).details : null);
+  const activeJobErrorDetails = typeof rawActiveJobErrorDetails === 'string' ? rawActiveJobErrorDetails : null;
   const rawActiveJobLessonId =
     typeof (courseProgress as any)?.active_job_lesson_id === 'string'
       ? (courseProgress as any).active_job_lesson_id
       : rawActiveJob && typeof rawActiveJob === 'object'
         ? (typeof (rawActiveJob as any).lessonId === 'string'
-            ? (rawActiveJob as any).lessonId
-            : typeof (rawActiveJob as any).lesson_id === 'string'
-              ? (rawActiveJob as any).lesson_id
-              : null)
+          ? (rawActiveJob as any).lessonId
+          : typeof (rawActiveJob as any).lesson_id === 'string'
+            ? (rawActiveJob as any).lesson_id
+            : null)
         : null;
   const activeJobLessonId = typeof rawActiveJobLessonId === 'string' ? rawActiveJobLessonId : null;
   const isPromptLocked = Boolean(activeJobStatus);
@@ -104,6 +307,14 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
         : typeof (courseProgress as any)?.lessons?.[activeLesson.id]?.result?.html === 'string'
           ? ((courseProgress as any).lessons?.[activeLesson.id]?.result as any).html
           : '';
+  const hasStoredFilesResult = Boolean(
+    ((courseProgress as any)?.result?.files &&
+      typeof (courseProgress as any).result.files === 'object' &&
+      !Array.isArray((courseProgress as any).result.files)) ||
+    ((courseProgress as any)?.lessons?.[activeLesson.id]?.result?.files &&
+      typeof (courseProgress as any).lessons?.[activeLesson.id]?.result?.files === 'object' &&
+      !Array.isArray((courseProgress as any).lessons?.[activeLesson.id]?.result?.files)),
+  );
   const hasCompletedJob = activeJobStatus === 'done';
 
   const syncProgress = useCallback(
@@ -131,11 +342,6 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     },
     [course.id, syncProgress],
   );
-
-  const getValueByPath = useCallback((source: unknown, path: string): unknown => {
-    if (!path) return undefined;
-    return path.split('.').reduce((acc: any, key) => (acc && typeof acc === 'object' ? acc[key] : undefined), source);
-  }, []);
 
   const isNonEmpty = (value: unknown) => {
     if (value === null || value === undefined) return false;
@@ -182,7 +388,41 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
           return true;
       }
     },
-    [getValueByPath],
+    [],
+  );
+
+  const resolveUnlockPlaceholders = useCallback(
+    (rule: any): any => {
+      const substituteValue = (value: unknown) => {
+        if (typeof value !== 'string') return value;
+        const normalized = value.trim();
+        const stripSigils = normalized
+          .replace(/^\$\{?/, '')
+          .replace(/\}?$/, '');
+        const map: Record<string, string> = {
+          lessonId: activeLesson.id,
+          'lesson.id': activeLesson.id,
+          currentLessonId: activeLesson.id,
+          lesson_id: activeLesson.id,
+        };
+        return map[normalized] ?? map[stripSigils] ?? normalized;
+      };
+
+      if (Array.isArray(rule)) {
+        return rule.map((item) => resolveUnlockPlaceholders(item));
+      }
+
+      if (rule && typeof rule === 'object') {
+        const next: any = { ...rule };
+        if (next.allOf) next.allOf = resolveUnlockPlaceholders(next.allOf);
+        if (next.anyOf) next.anyOf = resolveUnlockPlaceholders(next.anyOf);
+        if ('value' in next) next.value = substituteValue(next.value);
+        return next;
+      }
+
+      return rule;
+    },
+    [activeLesson.id],
   );
 
   const resolveUnlockPlaceholders = useCallback(
@@ -238,43 +478,54 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     return unlocked;
   }, [activeLesson.id, courseProgress]);
 
+  const lessonIdsKey = useMemo(() => course.lessons.map((lesson) => lesson.id).join('|'), [course.lessons]);
+
   useEffect(() => {
     let cancelled = false;
-    setProgressLoading(true);
+
+    // If we already have initialProgress with a resume point, we've already set the index.
+    // We still want to fetch the absolute latest, but without showing a full loader if we have data.
+    const hasInitialData = !!initialProgress?.resume_lesson_id;
+    if (!hasInitialData) {
+      setProgressLoading(true);
+    }
+
     (async () => {
       try {
-        const [progressData, resumeData] = await Promise.all([
-          fetchCourseProgress(course.id),
-          fetchCourseResume(course.id),
-        ]);
+        const progressData = await fetchCourseProgress(course.id);
 
         if (cancelled) return;
         syncProgress(progressData ?? {});
 
-        const resumeLessonId = resumeData?.lesson_id;
+        const resumeLessonId = progressData?.resume_lesson_id || progressData?.last_viewed_lesson_id;
         const resumeIndex = resumeLessonId
           ? course.lessons.findIndex((lesson) => lesson.id === resumeLessonId)
           : -1;
-        const nextLessonIndex = resumeIndex >= 0 ? resumeIndex : 0;
 
-        setActiveLessonIndex(nextLessonIndex);
+        if (resumeIndex >= 0 && resumeIndex !== activeLessonIndex) {
+          setActiveLessonIndex(resumeIndex);
+        }
 
-        const nextLesson = course.lessons[nextLessonIndex];
-        if (nextLesson) {
-          const nextLessonStatus = progressData?.lessons?.[nextLesson.id]?.status;
+        const currentLesson = course.lessons[resumeIndex >= 0 ? resumeIndex : 0];
+        if (currentLesson) {
+          if ((progressData as any)?.course_status === 'completed') return;
 
-          if (nextLessonStatus !== 'completed') {
+          const status = progressData?.lessons?.[currentLesson.id]?.status;
+
+          if (status !== 'completed') {
             await applyProgressPatch({
               op: 'lesson_status',
-              lessonId: nextLesson.id,
+              lessonId: currentLesson.id,
               status: 'in_progress',
             });
           }
 
-          await applyProgressPatch({
-            op: 'set_resume',
-            lessonId: nextLesson.id,
-          });
+          if (progressData?.resume_lesson_id !== currentLesson.id) {
+            await applyProgressPatch({
+              op: 'set_resume',
+              lessonId: currentLesson.id,
+            });
+          }
         }
       } catch (error) {
         console.error('Failed to load course progress', error);
@@ -286,7 +537,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [applyProgressPatch, course.id, course.lessons, syncProgress]);
+  }, [activeLessonIndex, applyProgressPatch, course.id, course.lessons, lessonIdsKey, syncProgress]);
 
   const isWorkshopLesson = useMemo(
     () => (activeLesson.lessonType ?? '').toLowerCase() === 'workshop',
@@ -339,9 +590,9 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
         const value =
           (normalizedGate as any).equals !== undefined
             ? (normalizedGate as any).equals
-              : (normalizedGate as any).value !== undefined
-                ? (normalizedGate as any).value
-                : (normalizedGate as any).expected;
+            : (normalizedGate as any).value !== undefined
+              ? (normalizedGate as any).value
+              : (normalizedGate as any).expected;
         if (!path) return true;
         const resolvedGate = resolveUnlockPlaceholders({ op: 'equals', path, value });
         return evaluateUnlockRule(resolvedGate, gateContext);
@@ -401,9 +652,6 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
 
     return pick(fromLesson);
   }, [activeLessonProgress]);
-
-  const isPromptReadOnly = Boolean(savedPrompt);
-
   const isCtaUnlocked = useMemo(() => {
     if ((activeLessonProgress as any)?.status === 'completed') return true;
     const unlockRuleRaw = (activeLesson as any)?.unlock_rule;
@@ -422,6 +670,9 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     // reference course-level fields (e.g. active_job.*) work.
     return evaluateUnlockRule(resolvedRule, gateContext);
   }, [activeLesson, activeLessonProgress, evaluateUnlockRule, gateContext, resolveUnlockPlaceholders]);
+
+  const ctaData = useMemo(() => extractCtaData(visibleBlocks), [visibleBlocks]);
+  const isFinishCta = useMemo(() => (ctaData.action ?? '').toLowerCase() === 'finish', [ctaData.action]);
 
   const quizBlock = useMemo(() => {
     const extract = (block: unknown) => {
@@ -482,12 +733,14 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
   useEffect(() => {
     const lessonChanged = activeLesson.id !== lastLessonIdRef.current;
     lastLessonIdRef.current = activeLesson.id;
-    const keepStreamAlive =
-      !lessonChanged &&
-      activeJobStatus === 'running' &&
-      activeJobId &&
-      streamingJobIdRef.current === activeJobId;
-    const hasSavedHtml = Boolean(savedResultHtml && savedResultHtml.trim());
+    const hasLiveStream = Boolean(streamControllerRef.current && streamingJobIdRef.current);
+    // Keep SSE stream alive across lesson navigation; abort only on CourseViewer unmount (exit course).
+    const keepStreamAlive = hasLiveStream;
+    const hasSavedHtml = hasStoredFilesResult || Boolean(savedResultHtml && savedResultHtml.trim());
+    const failedMessage =
+      activeJobStatus === 'failed' && isActiveJobForLesson
+        ? [activeJobError ?? 'Генерация не удалась.', activeJobErrorDetails].filter(Boolean).join(': ')
+        : null;
 
     const initialPrompt = savedPrompt ?? (isPromptLockedForLesson ? activeJobPrompt : '');
     setPromptInput(initialPrompt);
@@ -495,9 +748,9 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
       // Keep spinner while we continue streaming the same job
       setIsSendingPrompt(true);
     } else {
-      setIsSendingPrompt(activeJobStatus === 'running' && !hasSavedHtml);
-      setLlmHtml(hasSavedHtml ? savedResultHtml : null);
-      setLlmError(null);
+      setIsSendingPrompt(activeJobStatus === 'running' && isActiveJobForLesson && !hasSavedHtml);
+      setLlmHtml(hasSavedHtml && !hasStoredFilesResult ? savedResultHtml : null);
+      setLlmError(failedMessage);
       setLlmOutline(null);
       setLlmCss(null);
       setLlmSections({});
@@ -506,29 +759,29 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
       llmSectionsRef.current = {};
       llmSectionOrderRef.current = [];
       llmOutlineRef.current = null;
-      if (streamControllerRef.current) {
-        streamControllerRef.current.abort();
-        streamControllerRef.current = null;
-      }
-      streamingJobIdRef.current = keepStreamAlive ? streamingJobIdRef.current : null;
     }
   }, [
     activeJobId,
     activeJobPrompt,
     activeJobStatus,
     activeLesson.id,
+    isActiveJobForLesson,
+    activeJobError,
+    activeJobErrorDetails,
     savedPrompt,
     isPromptLockedForLesson,
     savedResultHtml,
+    hasStoredFilesResult,
   ]);
 
   useEffect(() => {
-    if (!isPromptLockedForLesson || isPromptReadOnly) return;
+    if (!isPromptLockedForLesson) return;
     setPromptInput(activeJobPrompt);
-  }, [activeJobPrompt, isPromptLockedForLesson, isPromptReadOnly]);
+  }, [activeJobPrompt, isPromptLockedForLesson]);
 
   useEffect(() => {
     if (!hasCompletedJob) return;
+    if (hasStoredFilesResult) return;
     if (!savedResultHtml || typeof savedResultHtml !== 'string' || !savedResultHtml.trim()) return;
     setLlmHtml((current) => (current === savedResultHtml ? current : savedResultHtml));
     setLlmCss(null);
@@ -541,7 +794,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     llmOutlineRef.current = null;
     setIsSendingPrompt(false);
     setLlmError(null);
-  }, [hasCompletedJob, savedResultHtml]);
+  }, [hasCompletedJob, hasStoredFilesResult, savedResultHtml]);
 
   useEffect(
     () => () => {
@@ -577,19 +830,19 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
         const itemsRaw = (block as any).items;
         const items = Array.isArray(itemsRaw)
           ? itemsRaw
-              .map((item) => {
-                if (!item || typeof item !== 'object') return null;
-                const label = typeof (item as any).label === 'string' ? (item as any).label : null;
-                const content = typeof (item as any).content === 'string' ? (item as any).content : null;
-                const notes = Array.isArray((item as any).notes)
-                  ? ((item as any).notes as unknown[])
-                      .filter((note) => typeof note === 'string')
-                      .map((note) => note as string)
-                  : null;
-                if (!label && !content) return null;
-                return { label, content, notes };
-              })
-              .filter(Boolean) as { label: string | null; content: string | null; notes: string[] | null }[]
+            .map((item) => {
+              if (!item || typeof item !== 'object') return null;
+              const label = typeof (item as any).label === 'string' ? (item as any).label : null;
+              const content = typeof (item as any).content === 'string' ? (item as any).content : null;
+              const notes = Array.isArray((item as any).notes)
+                ? ((item as any).notes as unknown[])
+                  .filter((note) => typeof note === 'string')
+                  .map((note) => note as string)
+                : null;
+              if (!label && !content) return null;
+              return { label, content, notes };
+            })
+            .filter(Boolean) as { label: string | null; content: string | null; notes: string[] | null }[]
           : null;
         return { title, tip, items };
       }
@@ -683,6 +936,55 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     [activeLessonIndex, applyProgressPatch, course.lessons, courseProgress?.lessons, unlockedLessonIds],
   );
 
+  const finishCourse = useCallback(async () => {
+    try {
+      const completedAt = new Date().toISOString();
+      try {
+        const updated = await patchCourseProgress(course.id, {
+          op: 'finish_course',
+          lessonId: activeLesson.id,
+          completedAt,
+        });
+        syncProgress(updated ?? {});
+        return;
+      } catch (error) {
+        const body = error instanceof ApiError ? (error.body as any) : null;
+        const unsupported =
+          body?.error === 'UNKNOWN_PATCH_OP' ||
+          (typeof body?.details === 'string' && body.details.includes('finish_course'));
+        if (!unsupported) throw error;
+      }
+
+      // Back-compat: if backend doesn't support finish_course yet, fall back to completing lessons.
+      const inProgressIds = Object.entries(courseProgress?.lessons ?? {})
+        .filter(([, value]) => (value as any)?.status === 'in_progress')
+        .map(([lessonId]) => lessonId);
+
+      for (const lessonId of inProgressIds) {
+        await applyProgressPatch({
+          op: 'lesson_status',
+          lessonId,
+          status: 'completed',
+          completedAt,
+        });
+      }
+
+      await applyProgressPatch({
+        op: 'lesson_status',
+        lessonId: activeLesson.id,
+        status: 'completed',
+        completedAt,
+      });
+
+      await applyProgressPatch({
+        op: 'set_resume',
+        lessonId: activeLesson.id,
+      });
+    } finally {
+      onBack();
+    }
+  }, [activeLesson.id, applyProgressPatch, course.id, courseProgress?.lessons, onBack, syncProgress]);
+
   const parseSseEvent = useCallback((rawEvent: string): { event: string; data: string } => {
     let eventName = 'message';
     const dataLines: string[] = [];
@@ -753,43 +1055,103 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     [buildHtml, llmCss, llmOutline, llmSections, llmSectionOrder],
   );
 
-  const iframeHtml = useMemo(() => {
+  const effectiveResultContainer = useMemo(() => {
+    const courseHasResult =
+      (courseProgress as any)?.result && typeof (courseProgress as any).result === 'object';
+    const courseHasWorkspace =
+      courseHasResult &&
+      (((courseProgress as any).result.files &&
+        typeof (courseProgress as any).result.files === 'object' &&
+        !Array.isArray((courseProgress as any).result.files)) ||
+        typeof (courseProgress as any).result.html === 'string');
+    if (courseHasWorkspace) return courseProgress;
+
+    const lessonResultOwner = (courseProgress as any)?.lessons?.[activeLesson.id];
+    const lessonHasResult =
+      lessonResultOwner &&
+      typeof lessonResultOwner === 'object' &&
+      (lessonResultOwner as any).result &&
+      typeof (lessonResultOwner as any).result === 'object';
+    return lessonHasResult ? lessonResultOwner : courseProgress;
+  }, [activeLesson.id, courseProgress]);
+
+  const storedWorkspace = useMemo(() => getWorkspace(effectiveResultContainer), [effectiveResultContainer]);
+
+  const liveSingleHtml = useMemo(() => {
     const raw = (llmHtml ?? liveHtmlFromParts ?? '').trim();
-    if (!raw) return null;
+    return raw.length > 0 ? raw : null;
+  }, [llmHtml, liveHtmlFromParts]);
 
-    const stylePieces = [IFRAME_BASE_STYLES];
-    if (llmCss && !raw.includes(llmCss)) {
-      stylePieces.push(llmCss);
-    }
-    const styleTag = `<style>${stylePieces.join('\n')}</style>`;
-    const tailwindScriptTag = `<script src="https://cdn.tailwindcss.com"></script>`;
-    const headInjection = `${tailwindScriptTag}${styleTag}`;
+  const previewWorkspace = useMemo<Workspace>(() => {
+    if (storedWorkspace.source === 'files') return storedWorkspace;
+    const html = liveSingleHtml ?? storedWorkspace.files['index.html'] ?? '';
+    return { files: { 'index.html': html }, activeFile: 'index.html', source: storedWorkspace.source };
+  }, [liveSingleHtml, storedWorkspace]);
 
-    const ensureHead = (html: string) => {
-      if (/<head[^>]*>/i.test(html)) {
-        return html.replace(/<head[^>]*>/i, (match) => `${match}${headInjection}`);
+  const previewExtraCss = storedWorkspace.source === 'files' ? null : (llmCss ?? null);
+
+  const [uiActiveFile, setUiActiveFile] = useState<string>('index.html');
+
+  useEffect(() => {
+    setUiActiveFile((current) => {
+      if (current && Object.prototype.hasOwnProperty.call(previewWorkspace.files, current)) return current;
+      return previewWorkspace.activeFile;
+    });
+  }, [activeLesson.id, previewWorkspace.activeFile, previewWorkspace.files]);
+
+  const hasRenderablePreview = useMemo(() => {
+    return Object.values(previewWorkspace.files).some((value) => typeof value === 'string' && value.trim().length > 0);
+  }, [previewWorkspace.files]);
+
+  const setActiveFileRemote = useCallback(
+    async (fileRaw: string) => {
+      const file = normalizeFileHref(fileRaw);
+      if (!file || !Object.prototype.hasOwnProperty.call(previewWorkspace.files, file)) return;
+      if (file === uiActiveFile) return;
+      setUiActiveFile(file);
+      try {
+        const response = await apiFetch<any>('/api/v1/progress/active-file', {
+          method: 'PATCH',
+          body: JSON.stringify({ courseId: course.id, file }),
+        });
+
+        if (response && typeof response === 'object' && typeof (response as any).error === 'string') {
+          throw new Error((response as any).error);
+        }
+
+        const nextProgressCandidate =
+          response && typeof response === 'object' && (response as any).progress && typeof (response as any).progress === 'object'
+            ? ((response as any).progress as CourseProgress)
+            : null;
+        const nextProgress = nextProgressCandidate ?? (await fetchCourseProgress(course.id));
+        syncProgress(nextProgress ?? {});
+      } catch (error) {
+        console.error('Failed to update active file', error);
+        setLlmError(describeApiError(error, 'Не удалось переключить страницу. Попробуйте ещё раз.'));
       }
-      if (/<html[^>]*>/i.test(html)) {
-        return html.replace(/<html[^>]*>/i, (match) => `${match}<head>${headInjection}</head>`);
-      }
-      return `${headInjection}\n${html}`;
+    },
+    [course.id, previewWorkspace.files, syncProgress, uiActiveFile],
+  );
+
+  const iframeSrcDoc = useMemo(() => {
+    const html = previewWorkspace.files[uiActiveFile] ?? '';
+    const decorated = decorateHtmlForPreview(html, previewExtraCss);
+    return injectIframeRouter(decorated);
+  }, [previewExtraCss, previewWorkspace.files, uiActiveFile]);
+
+  useEffect(() => {
+    const handler = (event: MessageEvent) => {
+      if (event.source !== previewIframeRef.current?.contentWindow) return;
+      const data = event.data;
+      if (!data || typeof data !== 'object') return;
+      if ((data as any).type !== 'NAVIGATE_FILE') return;
+      const file = typeof (data as any).file === 'string' ? ((data as any).file as string) : null;
+      if (!file) return;
+      void setActiveFileRemote(file);
     };
-
-    const withHead = ensureHead(raw);
-    const hasBodyTag = /<body[^>]*>/i.test(withHead);
-
-    if (hasBodyTag) {
-      return `<!doctype html>\n${withHead}`;
-    }
-
-    return `<!doctype html>
-<html>
-<head>${styleTag}</head>
-<body>
-${withHead}
-</body>
-</html>`;
-  }, [llmCss, llmHtml, liveHtmlFromParts]);
+    window.addEventListener('message', handler);
+    return () => window.removeEventListener('message', handler);
+  }, [setActiveFileRemote]);
 
   const cleanupStream = useCallback(() => {
     if (streamControllerRef.current) {
@@ -797,10 +1159,12 @@ ${withHead}
       streamControllerRef.current = null;
     }
     streamingJobIdRef.current = null;
+    streamLastEventAtRef.current = 0;
   }, []);
 
   const applyFinalPayload = useCallback(
-    (payload: any) => {
+    (payload: any, opts?: { final?: boolean }) => {
+      const isFinal = opts?.final ?? true;
       const payloadSections: Record<string, string> = {};
       if (payload?.sections && typeof payload.sections === 'object') {
         Object.entries(payload.sections as Record<string, string | unknown>).forEach(([key, value]) => {
@@ -843,12 +1207,12 @@ ${withHead}
         outlineKeys.length > 0
           ? outlineKeys.filter((key) => mergedSections[key])
           : (() => {
-              const base = [...llmSectionOrderRef.current];
-              Object.keys(payloadSections).forEach((key) => {
-                if (!base.includes(key)) base.push(key);
-              });
-              return base.filter((key) => mergedSections[key]);
-            })();
+            const base = [...llmSectionOrderRef.current];
+            Object.keys(payloadSections).forEach((key) => {
+              if (!base.includes(key)) base.push(key);
+            });
+            return base.filter((key) => mergedSections[key]);
+          })();
       llmSectionOrderRef.current = mergedOrder;
       setLlmSectionOrder(mergedOrder);
 
@@ -868,14 +1232,17 @@ ${withHead}
             : null;
       if (errorMessage) setLlmError(errorMessage);
 
-      setIsSendingPrompt(false);
-      cleanupStream();
+      if (isFinal) {
+        setIsSendingPrompt(false);
+        cleanupStream();
+      }
     },
     [buildHtml, cleanupStream, extractKeysFromOutline, parseJsonSafe],
   );
 
   const handleStreamEvent = useCallback(
     (incomingEventName: string, data: string) => {
+      streamLastEventAtRef.current = Date.now();
       const payload = parseJsonSafe(data);
       const payloadType =
         payload && typeof payload === 'object' && typeof (payload as any).type === 'string'
@@ -893,6 +1260,17 @@ ${withHead}
         }
         return value;
       };
+
+      if (eventName === 'status') {
+        const message =
+          payload && typeof payload === 'object'
+            ? ((payload as any).message ?? (payload as any).content ?? (payload as any).status)
+            : null;
+        if (typeof message === 'string' && message.trim()) {
+          setLlmStatusText(message.trim());
+        }
+        return;
+      }
 
       if (eventName === 'css') {
         const cssValue =
@@ -954,7 +1332,7 @@ ${withHead}
               : payload && typeof (payload as any).content === 'string'
                 ? (payload as any).content
                 : extractHtml(data),
-        });
+        }, { final: false });
         return;
       }
 
@@ -966,14 +1344,35 @@ ${withHead}
           typeof (payload as any).content === 'string'
             ? { ...(payload as any), html: (payload as any).content }
             : payload ?? {};
-        applyFinalPayload(finalPayload);
+        applyFinalPayload(finalPayload, { final: true });
+        setLlmStatusText(null);
+        // For edit/add_page jobs the SSE payload may not include full HTML; refresh progress to get updated workspace.
+        void (async () => {
+          try {
+            const refreshedProgress = await fetchCourseProgress(course.id);
+            syncProgress(refreshedProgress ?? {});
+          } catch (progressError) {
+            console.error('Failed to refresh progress after done', progressError);
+          }
+        })();
         return;
       }
 
       if (eventName === 'error') {
-        const message =
+        const detailsRaw = (payload as any)?.details ?? (payload as any)?.error_details ?? null;
+        const details =
+          typeof detailsRaw === 'string'
+            ? detailsRaw
+            : detailsRaw && typeof detailsRaw === 'object'
+              ? JSON.stringify(detailsRaw)
+              : null;
+        const baseMessage =
           ((payload as any)?.error ?? (payload as any)?.message ?? data) ||
           'Ошибка генерации HTML. Попробуйте ещё раз.';
+        const message =
+          details && typeof baseMessage === 'string' && baseMessage.trim()
+            ? `${baseMessage}: ${details}`
+            : baseMessage;
         const hasRenderablePayload =
           payload &&
           typeof payload === 'object' &&
@@ -988,21 +1387,23 @@ ${withHead}
               (payload as any)?.html && typeof (payload as any).html === 'string'
                 ? (payload as any).html
                 : extractHtml(data),
-          });
+          }, { final: true });
           return;
         }
 
         setLlmError(typeof message === 'string' ? message : String(message));
         setIsSendingPrompt(false);
         cleanupStream();
+        setLlmStatusText(null);
       }
     },
-    [applyFinalPayload, buildHtml, cleanupStream, parseJsonSafe],
+    [applyFinalPayload, buildHtml, cleanupStream, course.id, parseJsonSafe, syncProgress],
   );
 
   const startHtmlStream = useCallback(
     (jobId: string) => {
       streamingJobIdRef.current = jobId;
+      streamLastEventAtRef.current = Date.now();
       const controller = new AbortController();
       streamControllerRef.current = controller;
 
@@ -1032,6 +1433,7 @@ ${withHead}
 
           while (true) {
             const { value, done } = await reader.read();
+            streamLastEventAtRef.current = Date.now();
             buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
             const events = buffer.split('\n\n');
             buffer = events.pop() ?? '';
@@ -1053,6 +1455,7 @@ ${withHead}
           console.error('HTML stream error', error);
           setLlmError('Ошибка при получении потока. Попробуйте снова.');
           setIsSendingPrompt(false);
+          setLlmStatusText(null);
         } finally {
           if (!controller.signal.aborted) {
             streamControllerRef.current = null;
@@ -1065,13 +1468,56 @@ ${withHead}
     [apiBaseUrl, handleStreamEvent, parseSseEvent],
   );
 
+  // If stream stalls (no events) we fall back to /result polling to avoid infinite "Отправляем...".
+  useEffect(() => {
+    if (!isSendingPrompt) return;
+    if (!streamControllerRef.current) return;
+    const jobId = streamingJobIdRef.current;
+    if (!jobId) return;
+
+    const interval = window.setInterval(() => {
+      const lastAt = streamLastEventAtRef.current;
+      if (!lastAt) return;
+      if (Date.now() - lastAt < 20000) return;
+
+      // throttle polls
+      streamLastEventAtRef.current = Date.now();
+      void (async () => {
+        try {
+          const result = await apiFetch<any>(`/api/v1/html/result?jobId=${encodeURIComponent(jobId)}`);
+          const status = typeof result?.status === 'string' ? result.status : null;
+          if (status === 'done') {
+            applyFinalPayload(result ?? {}, { final: true });
+            setLlmStatusText(null);
+          } else if (status === 'error') {
+            const message =
+              typeof result?.error === 'string'
+                ? result.error
+                : 'Ошибка генерации HTML. Попробуйте ещё раз.';
+            setLlmError(message);
+            setIsSendingPrompt(false);
+            cleanupStream();
+            setLlmStatusText(null);
+          } else {
+            setLlmStatusText((current) => current ?? 'Генерация продолжается...');
+          }
+        } catch (error) {
+          console.error('Failed to poll html result', error);
+        }
+      })();
+    }, 1000);
+
+    return () => window.clearInterval(interval);
+  }, [applyFinalPayload, cleanupStream, isSendingPrompt]);
+
   const handlePromptSubmit = useCallback(async () => {
     const prompt = promptInput.trim();
-    if (!prompt || isSendingPrompt || isPromptReadOnly) return;
+    if (!prompt || isSendingPrompt) return;
 
     cleanupStream();
     setIsSendingPrompt(true);
     setLlmError(null);
+    setLlmStatusText(null);
     setLlmHtml(null);
     setLlmCss(null);
     setLlmSections({});
@@ -1093,9 +1539,13 @@ ${withHead}
         '/api/v1/html/start',
         {
           method: 'POST',
-          body: JSON.stringify({ prompt, lessonId: activeLesson.id }),
+          body: JSON.stringify({ prompt, lessonId: activeLesson.id, mode: activeLessonMode, courseId: course.id }),
         },
       );
+
+      if (response && typeof response === 'object' && typeof (response as any).error === 'string') {
+        throw new Error((response as any).error);
+      }
 
       if (!response?.jobId) {
         throw new Error('Сервер не вернул идентификатор задачи генерации.');
@@ -1111,13 +1561,21 @@ ${withHead}
       startHtmlStream(response.jobId);
     } catch (error) {
       console.error('Failed to send prompt to LLM', error);
-      const message =
-        error instanceof Error ? error.message : 'Ошибка при запросе LLM. Попробуйте ещё раз.';
+      let message = describeApiError(error, 'Ошибка при запросе LLM. Попробуйте ещё раз.');
+      if (error instanceof ApiError && error.status === 502) {
+        const code = (error.body as any)?.error;
+        if (code === 'LLM_PLAN_NO_SECTIONS') {
+          message =
+            'Сервер вернул LLM_PLAN_NO_SECTIONS. Проверьте, что для этого урока корректно выставлен mode (edit/add_page) и что /api/v1/html/start поддерживает запуск с mode.';
+        }
+      }
       setLlmError(message);
       setIsSendingPrompt(false);
+      setLlmStatusText(null);
     }
   }, [
     activeLesson.id,
+    activeLessonMode,
     applyProgressPatch,
     cleanupStream,
     course.id,
@@ -1133,6 +1591,7 @@ ${withHead}
       streamingJobIdRef.current = null;
       return;
     }
+    if (!isActiveJobForLesson) return;
     if (!activeJobId) return;
     if (streamingJobIdRef.current === activeJobId) return;
 
@@ -1140,11 +1599,13 @@ ${withHead}
     setIsSendingPrompt(true);
     setLlmError(null);
     startHtmlStream(activeJobId);
-  }, [activeJobId, activeJobStatus, cleanupStream, startHtmlStream]);
+  }, [activeJobId, activeJobStatus, cleanupStream, isActiveJobForLesson, startHtmlStream]);
 
   useEffect(() => {
     if (activeJobStatus !== 'done') return;
+    if (!isActiveJobForLesson) return;
     if (!activeJobId) return;
+    if (storedWorkspace.source === 'files') return;
     if (savedResultHtml && savedResultHtml.trim()) return;
     if (fetchedResultJobIdRef.current === activeJobId) return;
 
@@ -1156,7 +1617,13 @@ ${withHead}
         const result = await apiFetch<any>(
           `/api/v1/html/result?jobId=${encodeURIComponent(activeJobId)}`,
         );
-        applyFinalPayload(result ?? {});
+        applyFinalPayload(result ?? {}, { final: true });
+        try {
+          const refreshedProgress = await fetchCourseProgress(course.id);
+          syncProgress(refreshedProgress ?? {});
+        } catch (progressError) {
+          console.error('Failed to refresh progress after result fetch', progressError);
+        }
       } catch (error) {
         console.error('Failed to fetch html result', error);
         setLlmError('Не удалось загрузить результат генерации. Попробуйте ещё раз.');
@@ -1169,35 +1636,21 @@ ${withHead}
     activeJobId,
     activeJobStatus,
     applyFinalPayload,
+    course.id,
+    isActiveJobForLesson,
     savedResultHtml,
+    storedWorkspace.source,
+    syncProgress,
   ]);
 
   useEffect(() => {
     if (!savedResultHtml || !savedResultHtml.trim()) return;
+    if (storedWorkspace.source === 'files') return;
     setLlmHtml((current) => (current === savedResultHtml ? current : savedResultHtml));
     if (activeJobStatus !== 'running') {
       setIsSendingPrompt(false);
     }
-  }, [activeJobStatus, savedResultHtml]);
-
-  const ctaData = useMemo(() => {
-    const extract = (block: unknown) => {
-      if (block && typeof block === 'object' && (block as any).type === 'cta') {
-        const buttonText = typeof (block as any).buttonText === 'string' ? (block as any).buttonText : null;
-        const action = typeof (block as any).action === 'string' ? (block as any).action : null;
-        if (buttonText || action) {
-          return { buttonText, action };
-        }
-      }
-      return null;
-    };
-
-    for (const block of visibleBlocks) {
-      const value = extract(block);
-      if (value) return value;
-    }
-    return { buttonText: null, action: null };
-  }, [visibleBlocks]);
+  }, [activeJobStatus, savedResultHtml, storedWorkspace.source]);
 
   type LessonBlockItem = { key: string; content: string; prompt: string; blockType: string | null };
 
@@ -1247,20 +1700,26 @@ ${withHead}
         return (
           <div className="flex flex-col h-full bg-[#050914] border-l border-white/5">
             <div className="flex-1 border-b border-white/5 relative overflow-hidden">
-              {iframeHtml ? (
-                <iframe
-                  key={`${activeLesson.id}-${iframeHtml.length}`}
-                  srcDoc={iframeHtml}
-                  title="LLM Generated Site"
-                  className="w-full h-full bg-black"
-                  sandbox="allow-scripts allow-same-origin"
-                />
+              {hasRenderablePreview ? (
+                <div className="absolute inset-0 flex flex-col">
+                  <iframe
+                    ref={previewIframeRef}
+                    key={`${activeLesson.id}-${uiActiveFile}`}
+                    srcDoc={iframeSrcDoc}
+                    title="LLM Generated Site"
+                    className="w-full flex-1 bg-black"
+                    sandbox="allow-scripts allow-same-origin"
+                  />
+                </div>
               ) : (
                 <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-400 gap-3 p-6 text-center">
                   {isSendingPrompt ? (
                     <>
                       <div className="w-10 h-10 border-2 border-white/10 border-t-vibe-500 rounded-full animate-spin"></div>
                       <p className="font-mono text-sm text-slate-200">Генерируем сайт...</p>
+                      {llmStatusText && (
+                        <p className="text-xs text-slate-400 max-w-md">{llmStatusText}</p>
+                      )}
                     </>
                   ) : (
                     <>
@@ -1279,29 +1738,28 @@ ${withHead}
             <div className="h-1/3 p-4 bg-[#02050e] flex flex-col">
               <div className="flex gap-2 mb-2">
                 <div className="w-3 h-3 rounded-full bg-red-500/20"></div>
-                  <div className="w-3 h-3 rounded-full bg-yellow-500/20"></div>
-                  <div className="w-3 h-3 rounded-full bg-green-500/20"></div>
-                </div>
-              {llmError && !iframeHtml && (
+                <div className="w-3 h-3 rounded-full bg-yellow-500/20"></div>
+                <div className="w-3 h-3 rounded-full bg-green-500/20"></div>
+              </div>
+              {llmError && !hasRenderablePreview && (
                 <div className="text-xs text-red-200 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2 mb-2">
                   {llmError}
                 </div>
               )}
               <div className="relative flex-1 mt-1">
                 <textarea
-                  disabled={isPromptReadOnly}
                   value={promptInput}
                   onChange={(e) => setPromptInput(e.target.value)}
-                  className={`w-full h-full bg-transparent text-sm resize-none font-mono focus:outline-none pr-28 ${
-                    isWorkshopLesson ? 'text-slate-200' : 'text-slate-500'
-                  }`}
+                  disabled={isLectureLesson}
+                  className={`w-full h-full bg-transparent text-sm resize-none font-mono focus:outline-none pr-28 ${isWorkshopLesson ? 'text-slate-200' : 'text-slate-500'
+                    }`}
                   placeholder={isLectureLesson ? '' : 'Console ready...'}
                 />
                 {isWorkshopLesson && promptInput.trim().length > 0 && (
                   <button
                     type="button"
                     onClick={handlePromptSubmit}
-                    disabled={isSendingPrompt || isPromptReadOnly}
+                    disabled={isSendingPrompt}
                     className="absolute bottom-3 right-3 px-3 py-1.5 rounded-lg bg-vibe-600 text-white text-xs font-semibold flex items-center gap-2 shadow-lg shadow-vibe-900/30 hover:bg-vibe-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                     style={{ cursor: 'pointer' }}
                   >
@@ -1318,284 +1776,282 @@ ${withHead}
 
   return (
     <div className="h-screen w-screen flex flex-col bg-void text-white overflow-hidden font-sans">
-        {/* Header */}
-        <header className="h-16 border-b border-white/5 bg-[#050914] flex items-center justify-between px-4 shrink-0 z-30">
-            <div className="flex items-center gap-4">
-                <button 
-                    onClick={onBack} 
-                    className="flex items-center gap-2 text-slate-400 hover:text-white transition-colors text-sm font-bold uppercase tracking-wider hover:bg-white/5 px-3 py-1.5 rounded-lg"
-                >
-                    <ChevronLeft className="w-4 h-4" /> Назад
-                </button>
-                <div className="h-6 w-px bg-white/10 mx-2 hidden md:block"></div>
-                <h1 className="font-bold text-lg hidden md:block font-display tracking-tight text-slate-200">{course.title}</h1>
-            </div>
-            <div className="flex items-center gap-4">
-                <span className="text-xs text-vibe-400 font-mono px-3 py-1 bg-vibe-500/10 border border-vibe-500/20 rounded-full">
-                    Урок {activeLessonIndex + 1} / {course.lessons.length}
-                </span>
-                <button 
-                    className="md:hidden text-slate-300"
-                    onClick={() => setSidebarOpen(!sidebarOpen)}
-                >
-                    {sidebarOpen ? <X /> : <Menu />}
-                </button>
-            </div>
-        </header>
+      {/* Header */}
+      <header className="h-16 border-b border-white/5 bg-[#050914] flex items-center justify-between px-4 shrink-0 z-30">
+        <div className="flex items-center gap-4">
+          <button
+            onClick={onBack}
+            className="flex items-center gap-2 text-slate-400 hover:text-white transition-colors text-sm font-bold uppercase tracking-wider hover:bg-white/5 px-3 py-1.5 rounded-lg"
+          >
+            <ChevronLeft className="w-4 h-4" /> Назад
+          </button>
+          <div className="h-6 w-px bg-white/10 mx-2 hidden md:block"></div>
+          <h1 className="font-bold text-lg hidden md:block font-display tracking-tight text-slate-200">{course.title}</h1>
+        </div>
+        <div className="flex items-center gap-4">
+          <span className="text-xs text-vibe-400 font-mono px-3 py-1 bg-vibe-500/10 border border-vibe-500/20 rounded-full">
+            Урок {activeLessonIndex + 1} / {course.lessons.length}
+          </span>
+          <button
+            className="md:hidden text-slate-300"
+            onClick={() => setSidebarOpen(!sidebarOpen)}
+          >
+            {sidebarOpen ? <X /> : <Menu />}
+          </button>
+        </div>
+      </header>
 
-        <div className="flex-1 flex overflow-hidden relative">
-            {/* Sidebar (Lesson List) */}
-            <aside className={`
+      <div className="flex-1 flex overflow-hidden relative">
+        {/* Sidebar (Lesson List) */}
+        <aside className={`
                 absolute md:relative z-20 w-72 bg-[#02050e] border-r border-white/5 h-full transition-transform duration-300 flex flex-col
                 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
             `}>
-                <div className="overflow-y-auto h-full pb-20 custom-scrollbar">
-                    {course.lessons.map((lesson, idx) => {
-                      const canNavigate = unlockedLessonIds.has(lesson.id);
-                      return (
-                        <button
-                          key={lesson.id}
-                          onClick={() => (canNavigate ? goToLesson(idx) : undefined)}
-                          disabled={!canNavigate}
-                          className={`w-full text-left p-4 border-b border-white/5 hover:bg-white/5 transition-all flex items-start gap-3 group
+          <div className="overflow-y-auto h-full pb-20 custom-scrollbar">
+            {course.lessons.map((lesson, idx) => {
+              const canNavigate = unlockedLessonIds.has(lesson.id);
+              return (
+                <button
+                  key={lesson.id}
+                  onClick={() => (canNavigate ? goToLesson(idx) : undefined)}
+                  disabled={!canNavigate}
+                  className={`w-full text-left p-4 border-b border-white/5 hover:bg-white/5 transition-all flex items-start gap-3 group
                               ${activeLessonIndex === idx ? 'bg-white/5 border-l-2 border-l-vibe-500' : 'border-l-2 border-l-transparent'}
                               ${canNavigate ? '' : 'opacity-50 cursor-not-allowed'}
                           `}
-                        >
-                          <div className={`mt-0.5 w-6 h-6 rounded flex items-center justify-center text-[10px] font-bold transition-colors
+                >
+                  <div className={`mt-0.5 w-6 h-6 rounded flex items-center justify-center text-[10px] font-bold transition-colors
                               ${activeLessonIndex === idx ? 'bg-vibe-500 text-white shadow-lg shadow-vibe-500/20' : 'bg-slate-800 text-slate-500 group-hover:bg-slate-700'}
                           `}>
-                              {idx + 1}
-                          </div>
-                          <div>
-                              <h4 className={`text-sm font-medium mb-1 transition-colors ${activeLessonIndex === idx ? 'text-white' : 'text-slate-400 group-hover:text-slate-200'}`}>
-                                  {lesson.title}
-                              </h4>
-                              <span className="text-[10px] text-slate-600 uppercase tracking-wider font-bold">
-                                  {lesson.lessonTypeRu ?? lesson.lessonType ?? lesson.type ?? ''}
-                              </span>
-                          </div>
-                        </button>
-                      );
-                    })}
-                </div>
-            </aside>
+                    {idx + 1}
+                  </div>
+                  <div>
+                    <h4 className={`text-sm font-medium mb-1 transition-colors ${activeLessonIndex === idx ? 'text-white' : 'text-slate-400 group-hover:text-slate-200'}`}>
+                      {lesson.title}
+                    </h4>
+                    <span className="text-[10px] text-slate-600 uppercase tracking-wider font-bold">
+                      {lesson.lessonTypeRu ?? lesson.lessonType ?? lesson.type ?? ''}
+                    </span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </aside>
 
-            {/* Main Content Area */}
-            <main className="flex-1 flex flex-col md:flex-row h-full overflow-hidden">
-                
-                {/* Left Side: Description & Video */}
-                <div className="w-full md:w-1/2 overflow-y-auto p-6 md:p-10 custom-scrollbar bg-void">
-                    <div className="max-w-3xl mx-auto">
-                        <div className="mb-8">
-                             <span className="text-vibe-400 text-xs font-bold uppercase tracking-widest mb-2 block">
-                               {activeLesson.lessonTypeRu ?? activeLesson.lessonType ?? activeLesson.type ?? 'Lesson'}
-                             </span>
-                             <h2 className="text-3xl md:text-4xl font-bold text-white font-display">{activeLesson.title}</h2>
-                             {heroSubtitle && (
-                               <p className="text-slate-300 text-base md:text-lg leading-relaxed mt-3">
-                                 {heroSubtitle}
-                               </p>
-                             )}
+        {/* Main Content Area */}
+        <main className="flex-1 flex flex-col md:flex-row h-full overflow-hidden">
+
+          {/* Left Side: Description & Video */}
+          <div className="w-full md:w-1/2 overflow-y-auto p-6 md:p-10 custom-scrollbar bg-void">
+            <div className="max-w-3xl mx-auto">
+              <div className="mb-8">
+                <span className="text-vibe-400 text-xs font-bold uppercase tracking-widest mb-2 block">
+                  {activeLesson.lessonTypeRu ?? activeLesson.lessonType ?? activeLesson.type ?? 'Lesson'}
+                </span>
+                <h2 className="text-3xl md:text-4xl font-bold text-white font-display">{activeLesson.title}</h2>
+                {heroSubtitle && (
+                  <p className="text-slate-300 text-base md:text-lg leading-relaxed mt-3">
+                    {heroSubtitle}
+                  </p>
+                )}
+              </div>
+
+              <div className="prose prose-invert prose-lg prose-headings:font-display prose-p:text-slate-400 prose-strong:text-white max-w-none space-y-6">
+                {blockItems.map((block, idx) =>
+                  block.blockType === 'tip' ? (
+                    <div key={block.key} className="not-prose space-y-2">
+                      <p className="text-[11px] uppercase tracking-[0.32em] text-slate-400 font-semibold">
+                        Практические советы
+                      </p>
+                      <div className="relative overflow-hidden rounded-2xl border border-emerald-400/35 bg-gradient-to-br from-[#0c1613] via-[#0a1413] to-[#081012] shadow-lg shadow-emerald-900/30">
+                        <div
+                          className="absolute inset-0 pointer-events-none opacity-40"
+                          style={{
+                            background:
+                              'radial-gradient(circle at 20% 30%, rgba(16,185,129,0.14), transparent 45%), radial-gradient(circle at 85% 20%, rgba(16,185,129,0.18), transparent 40%)',
+                          }}
+                          aria-hidden
+                        />
+                        <div className="relative flex items-start gap-3 p-4 md:p-5">
+                          <div className="mt-0.5 flex h-7 w-7 items-center justify-center rounded-full border border-emerald-500/50 bg-emerald-500/5 text-emerald-400">
+                            <Info className="h-3.5 w-3.5" />
+                          </div>
+                          <p className="text-[16px] md:text-[17px] text-emerald-50 whitespace-pre-line leading-[1.35] font-medium">
+                            {block.content}
+                          </p>
                         </div>
-
-                        <div className="prose prose-invert prose-lg prose-headings:font-display prose-p:text-slate-400 prose-strong:text-white max-w-none space-y-6">
-                          {blockItems.map((block, idx) =>
-                            block.blockType === 'tip' ? (
-                              <div key={block.key} className="not-prose space-y-2">
-                                <p className="text-[11px] uppercase tracking-[0.32em] text-slate-400 font-semibold">
-                                  Практические советы
-                                </p>
-                                <div className="relative overflow-hidden rounded-2xl border border-emerald-400/35 bg-gradient-to-br from-[#0c1613] via-[#0a1413] to-[#081012] shadow-lg shadow-emerald-900/30">
-                                  <div
-                                    className="absolute inset-0 pointer-events-none opacity-40"
-                                    style={{
-                                      background:
-                                        'radial-gradient(circle at 20% 30%, rgba(16,185,129,0.14), transparent 45%), radial-gradient(circle at 85% 20%, rgba(16,185,129,0.18), transparent 40%)',
-                                    }}
-                                    aria-hidden
-                                  />
-                                  <div className="relative flex items-start gap-3 p-4 md:p-5">
-                                    <div className="mt-0.5 flex h-7 w-7 items-center justify-center rounded-full border border-emerald-500/50 bg-emerald-500/5 text-emerald-400">
-                                      <Info className="h-3.5 w-3.5" />
-                                    </div>
-                                    <p className="text-[16px] md:text-[17px] text-emerald-50 whitespace-pre-line leading-[1.35] font-medium">
-                                      {block.content}
-                                    </p>
-                                  </div>
-                                </div>
-                              </div>
-                            ) : (
-                              <div key={block.key} className="space-y-3">
-                                {block.content && (
-                                  <p className="whitespace-pre-line leading-relaxed">{block.content}</p>
-                                )}
-                                {block.prompt && (
-                                  <div className="relative p-4 md:p-5 rounded-xl bg-[#0b1020] border border-vibe-500/30">
-                                    <button
-                                      type="button"
-                                      onClick={() => handleCopyPrompt(block.prompt, idx)}
-                                      className="absolute -top-3 right-4 text-[9px] md:text-[10px] uppercase tracking-wide px-2.5 py-1.5 rounded-md border border-white/15 text-slate-200 bg-white/5 backdrop-blur-sm hover:bg-white/10 hover:border-vibe-400/40 hover:text-white transition-colors shadow-lg shadow-black/30"
-                                      style={{ cursor: 'pointer' }}
-                                    >
-                                      {copiedPromptBlock === idx ? 'Скопировано' : 'Скопировать'}
-                                    </button>
-                                    <p className="text-xs md:text-sm text-white whitespace-pre-line leading-relaxed">
-                                      {block.prompt}
-                                    </p>
-                                  </div>
-                                )}
-                              </div>
-                            )
-                          )}
-                        </div>
-
-                        {examplesBlock && (
-                          <div className="mt-8 p-6 rounded-2xl border border-white/10 bg-white/5 shadow-lg shadow-black/20 space-y-4">
-                            <div className="flex items-start gap-3">
-                              <div className="w-10 h-10 rounded-full bg-purple-500/15 text-purple-200 font-bold flex items-center justify-center border border-purple-500/20 text-lg">
-                                ✦
-                              </div>
-                              <div className="space-y-1">
-                                <p className="text-xs uppercase tracking-wider text-purple-200 font-semibold">Examples</p>
-                                <p className="text-2xl font-display font-semibold text-white leading-tight">
-                                  {examplesBlock.title ?? 'Примеры'}
-                                </p>
-                                {examplesBlock.tip && (
-                                  <p className="text-sm text-slate-300 whitespace-pre-line leading-relaxed max-w-3xl">
-                                    {examplesBlock.tip}
-                                  </p>
-                                )}
-                              </div>
-                            </div>
-
-                            {examplesBlock.items && examplesBlock.items.length > 0 && (
-                              <div className="space-y-3">
-                                {examplesBlock.items.map((item, idx) => {
-                                  const label = (item.label ?? '').toLowerCase();
-                                  const isBad = label.includes('плох');
-                                  const accentClasses = isBad
-                                    ? 'bg-[#0b1020] border-slate-700/40 text-slate-200'
-                                    : 'bg-[#0c1a22] border-teal-500/25 text-teal-100';
-                                  const badgeClasses = isBad
-                                    ? 'bg-slate-700/40 text-slate-200 border border-slate-500/40'
-                                    : 'bg-teal-500/20 text-teal-100 border border-teal-400/30';
-                                  const noteColor = isBad ? 'text-slate-400' : 'text-teal-100/80';
-
-                                  return (
-                                    <div
-                                      key={idx}
-                                      className={`p-4 rounded-xl border ${accentClasses} space-y-2`}
-                                    >
-                                      <div className="flex items-center gap-2">
-                                        {item.label && (
-                                          <span className={`text-xs font-semibold uppercase tracking-wide px-2 py-1 rounded-full ${badgeClasses}`}>
-                                            {item.label}
-                                          </span>
-                                        )}
-                                      </div>
-                                      {item.content && (
-                                        <div className="rounded-lg bg-white/5 px-3 py-2 border border-white/5 relative">
-                                          <button
-                                            type="button"
-                                            onClick={() => handleCopyExample(item.content, idx)}
-                                            className="absolute top-2 right-2 text-[11px] uppercase tracking-wide px-2 py-1 rounded-md border border-white/10 text-slate-300 hover:border-vibe-400/40 hover:text-white transition-colors"
-                                            style={{ cursor: item.content ? 'pointer' : 'default' }}
-                                          >
-                                            {copiedExample === idx ? 'Скопировано' : 'Копировать'}
-                                          </button>
-                                          <p className="text-sm text-white whitespace-pre-line leading-relaxed max-w-3xl pr-16">
-                                            {item.content}
-                                          </p>
-                                        </div>
-                                      )}
-                                      {item.notes && item.notes.length > 0 && (
-                                        <ul className="space-y-1.5 text-sm leading-snug list-disc list-inside">
-                                          {item.notes.map((note, noteIdx) => (
-                                            <li key={noteIdx} className={noteColor}>
-                                              {note}
-                                            </li>
-                                          ))}
-                                        </ul>
-                                      )}
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            )}
-                          </div>
-                        )}
-
-                        {quizBlock && (
-                          <div className="mt-8 p-6 rounded-2xl border border-white/10 bg-white/5 shadow-lg shadow-black/20">
-                            <div className="flex items-start gap-3 mb-3">
-                              <div className="w-10 h-10 rounded-full bg-vibe-500/15 text-vibe-300 font-bold flex items-center justify-center border border-vibe-500/20">
-                                ?
-                              </div>
-                              <div>
-                                <p className="text-xs uppercase tracking-wider text-vibe-300 font-bold mb-1">Quiz</p>
-                                <p className="text-xl font-display text-white leading-tight">
-                                  {quizBlock.title ?? 'Мини-эксперимент'}
-                                </p>
-                              </div>
-                            </div>
-                            {quizBlock.question && (
-                              <p className="text-slate-300 whitespace-pre-line leading-relaxed">{quizBlock.question}</p>
-                            )}
-                            {quizBlock.options && quizBlock.options.length > 0 && (
-                              <div className="mt-4 space-y-2">
-                                {quizBlock.options.map((option, idx) => (
-                                  <button
-                                    key={idx}
-                                    type="button"
-                                    onClick={() => handleQuizSelect(idx, option)}
-                                    className={`w-full text-left px-4 py-3 rounded-xl border transition-colors ${
-                                      quizAnswer === idx
-                                        ? 'bg-green-500/10 border-green-400/40 text-green-100'
-                                        : 'bg-[#070c18] border-white/5 text-slate-200 hover:border-vibe-500/30 hover:bg-white/5'
-                                    }`}
-                                    style={{ cursor: 'pointer' }}
-                                  >
-                                    <span className="text-sm">{option}</span>
-                                  </button>
-                                ))}
-                              </div>
-                            )}
-                            {quizBlock.note && (
-                              <div className="mt-4 text-xs text-slate-400 italic">Note: {quizBlock.note}</div>
-                            )}
-                          </div>
-                        )}
-                        
-                        <div className="mt-12 flex justify-between items-center pt-8 border-t border-white/10">
-                            <button 
-                                disabled={activeLessonIndex === 0}
-                                onClick={() => goToLesson(activeLessonIndex - 1)}
-                                className="px-5 py-2.5 rounded-xl border border-white/10 text-slate-400 disabled:opacity-30 hover:bg-white/5 transition-colors font-bold text-sm"
-                            >
-                                Предыдущий
-                            </button>
-                            <button 
-                                disabled={activeLessonIndex === course.lessons.length - 1 || !isCtaUnlocked}
-                                onClick={() => goToLesson(activeLessonIndex + 1, { completeCurrent: true })}
-                                className="px-6 py-2.5 rounded-xl bg-vibe-600 text-white font-bold hover:bg-vibe-500 transition-colors shadow-lg shadow-vibe-900/20 disabled:opacity-50 text-sm flex items-center gap-2"
-                                data-action={ctaData.action ?? undefined}
-                            >
-                                {ctaData.buttonText ?? 'Следующий'} <ChevronRight className="w-4 h-4" />
-                            </button>
-                        </div>
+                      </div>
                     </div>
-                </div>
+                  ) : (
+                    <div key={block.key} className="space-y-3">
+                      {block.content && (
+                        <p className="whitespace-pre-line leading-relaxed">{block.content}</p>
+                      )}
+                      {block.prompt && (
+                        <div className="relative p-4 md:p-5 rounded-xl bg-[#0b1020] border border-vibe-500/30">
+                          <button
+                            type="button"
+                            onClick={() => handleCopyPrompt(block.prompt, idx)}
+                            className="absolute -top-3 right-4 text-[9px] md:text-[10px] uppercase tracking-wide px-2.5 py-1.5 rounded-md border border-white/15 text-slate-200 bg-white/5 backdrop-blur-sm hover:bg-white/10 hover:border-vibe-400/40 hover:text-white transition-colors shadow-lg shadow-black/30"
+                            style={{ cursor: 'pointer' }}
+                          >
+                            {copiedPromptBlock === idx ? 'Скопировано' : 'Скопировать'}
+                          </button>
+                          <p className="text-xs md:text-sm text-white whitespace-pre-line leading-relaxed">
+                            {block.prompt}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  )
+                )}
+              </div>
 
-                {/* Right Side: Interactive Window */}
-                <div className="w-full md:w-1/2 h-1/2 md:h-full border-t md:border-t-0 md:border-l border-white/5 bg-[#050914] z-10 shadow-2xl relative">
-                    {/* IDE Header Decoration */}
-                    <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-vibe-500/50 to-transparent"></div>
-                    {renderRightPanel()}
-                </div>
+              {examplesBlock && (
+                <div className="mt-8 p-6 rounded-2xl border border-white/10 bg-white/5 shadow-lg shadow-black/20 space-y-4">
+                  <div className="flex items-start gap-3">
+                    <div className="w-10 h-10 rounded-full bg-purple-500/15 text-purple-200 font-bold flex items-center justify-center border border-purple-500/20 text-lg">
+                      ✦
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-xs uppercase tracking-wider text-purple-200 font-semibold">Examples</p>
+                      <p className="text-2xl font-display font-semibold text-white leading-tight">
+                        {examplesBlock.title ?? 'Примеры'}
+                      </p>
+                      {examplesBlock.tip && (
+                        <p className="text-sm text-slate-300 whitespace-pre-line leading-relaxed max-w-3xl">
+                          {examplesBlock.tip}
+                        </p>
+                      )}
+                    </div>
+                  </div>
 
-            </main>
-        </div>
+                  {examplesBlock.items && examplesBlock.items.length > 0 && (
+                    <div className="space-y-3">
+                      {examplesBlock.items.map((item, idx) => {
+                        const label = (item.label ?? '').toLowerCase();
+                        const isBad = label.includes('плох');
+                        const accentClasses = isBad
+                          ? 'bg-[#0b1020] border-slate-700/40 text-slate-200'
+                          : 'bg-[#0c1a22] border-teal-500/25 text-teal-100';
+                        const badgeClasses = isBad
+                          ? 'bg-slate-700/40 text-slate-200 border border-slate-500/40'
+                          : 'bg-teal-500/20 text-teal-100 border border-teal-400/30';
+                        const noteColor = isBad ? 'text-slate-400' : 'text-teal-100/80';
+
+                        return (
+                          <div
+                            key={idx}
+                            className={`p-4 rounded-xl border ${accentClasses} space-y-2`}
+                          >
+                            <div className="flex items-center gap-2">
+                              {item.label && (
+                                <span className={`text-xs font-semibold uppercase tracking-wide px-2 py-1 rounded-full ${badgeClasses}`}>
+                                  {item.label}
+                                </span>
+                              )}
+                            </div>
+                            {item.content && (
+                              <div className="rounded-lg bg-white/5 px-3 py-2 border border-white/5 relative">
+                                <button
+                                  type="button"
+                                  onClick={() => handleCopyExample(item.content, idx)}
+                                  className="absolute top-2 right-2 text-[11px] uppercase tracking-wide px-2 py-1 rounded-md border border-white/10 text-slate-300 hover:border-vibe-400/40 hover:text-white transition-colors"
+                                  style={{ cursor: item.content ? 'pointer' : 'default' }}
+                                >
+                                  {copiedExample === idx ? 'Скопировано' : 'Копировать'}
+                                </button>
+                                <p className="text-sm text-white whitespace-pre-line leading-relaxed max-w-3xl pr-16">
+                                  {item.content}
+                                </p>
+                              </div>
+                            )}
+                            {item.notes && item.notes.length > 0 && (
+                              <ul className="space-y-1.5 text-sm leading-snug list-disc list-inside">
+                                {item.notes.map((note, noteIdx) => (
+                                  <li key={noteIdx} className={noteColor}>
+                                    {note}
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {quizBlock && (
+                <div className="mt-8 p-6 rounded-2xl border border-white/10 bg-white/5 shadow-lg shadow-black/20">
+                  <div className="flex items-start gap-3 mb-3">
+                    <div className="w-10 h-10 rounded-full bg-vibe-500/15 text-vibe-300 font-bold flex items-center justify-center border border-vibe-500/20">
+                      ?
+                    </div>
+                    <div>
+                      <p className="text-xs uppercase tracking-wider text-vibe-300 font-bold mb-1">Quiz</p>
+                      <p className="text-xl font-display text-white leading-tight">
+                        {quizBlock.title ?? 'Мини-эксперимент'}
+                      </p>
+                    </div>
+                  </div>
+                  {quizBlock.question && (
+                    <p className="text-slate-300 whitespace-pre-line leading-relaxed">{quizBlock.question}</p>
+                  )}
+                  {quizBlock.options && quizBlock.options.length > 0 && (
+                    <div className="mt-4 space-y-2">
+                      {quizBlock.options.map((option, idx) => (
+                        <button
+                          key={idx}
+                          type="button"
+                          onClick={() => handleQuizSelect(idx, option)}
+                          className={`w-full text-left px-4 py-3 rounded-xl border transition-colors ${quizAnswer === idx
+                              ? 'bg-green-500/10 border-green-400/40 text-green-100'
+                              : 'bg-[#070c18] border-white/5 text-slate-200 hover:border-vibe-500/30 hover:bg-white/5'
+                            }`}
+                          style={{ cursor: 'pointer' }}
+                        >
+                          <span className="text-sm">{option}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {quizBlock.note && (
+                    <div className="mt-4 text-xs text-slate-400 italic">Note: {quizBlock.note}</div>
+                  )}
+                </div>
+              )}
+
+              <div className="mt-12 flex justify-between items-center pt-8 border-t border-white/10">
+                <button
+                  disabled={activeLessonIndex === 0}
+                  onClick={() => goToLesson(activeLessonIndex - 1)}
+                  className="px-5 py-2.5 rounded-xl border border-white/10 text-slate-400 disabled:opacity-30 hover:bg-white/5 transition-colors font-bold text-sm"
+                >
+                  Предыдущий
+                </button>
+                <button
+                  disabled={(!isFinishCta && activeLessonIndex === course.lessons.length - 1) || !isCtaUnlocked}
+                  onClick={() => (isFinishCta ? finishCourse() : goToLesson(activeLessonIndex + 1, { completeCurrent: true }))}
+                  className="px-6 py-2.5 rounded-xl bg-vibe-600 text-white font-bold hover:bg-vibe-500 transition-colors shadow-lg shadow-vibe-900/20 disabled:opacity-50 text-sm flex items-center gap-2"
+                >
+                  {ctaData.buttonText ?? 'Следующий'} <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Right Side: Interactive Window */}
+          <div className="w-full md:w-1/2 h-1/2 md:h-full border-t md:border-t-0 md:border-l border-white/5 bg-[#050914] z-10 shadow-2xl relative">
+            {/* IDE Header Decoration */}
+            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-vibe-500/50 to-transparent"></div>
+            {renderRightPanel()}
+          </div>
+
+        </main>
+      </div>
     </div>
   );
 };
