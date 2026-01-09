@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { X, Mail, Lock, User as UserIcon, ArrowRight, Loader2, Chrome } from 'lucide-react';
 import { supabase } from '../services/supabaseClient';
 import { me, loginWithEmail, registerWithEmail } from '../services/authApi';
@@ -23,6 +23,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
+  const [registerConsent, setRegisterConsent] = useState(false);
+  const formRef = useRef<HTMLFormElement | null>(null);
+  const [isFormValid, setIsFormValid] = useState(false);
   const [loading, setLoading] = useState(false);
   const [oauthInProgress, setOauthInProgress] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -32,6 +35,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     setEmail('');
     setPassword('');
     setName('');
+    setRegisterConsent(false);
     setError(null);
     setInfo(null);
     setLoading(false);
@@ -59,10 +63,22 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     return () => window.removeEventListener('focus', handleFocus);
   }, [oauthInProgress]);
 
+  useEffect(() => {
+    setIsFormValid(Boolean(formRef.current?.checkValidity()));
+  }, [mode, name, email, password]);
+
   if (!isOpen) return null;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!formRef.current?.checkValidity()) {
+      setIsFormValid(false);
+      return;
+    }
+    if (mode === 'register' && !registerConsent) {
+      setError('Для регистрации нужно принять Пользовательское соглашение и Политику конфиденциальности.');
+      return;
+    }
     setLoading(true);
     setOauthInProgress(false);
     setError(null);
@@ -172,7 +188,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             </div>
           </div>
 
-          <form onSubmit={handleSubmit} className="space-y-4" autoComplete="on">
+          <form ref={formRef} onSubmit={handleSubmit} className="space-y-4" autoComplete="on">
             {mode === 'register' && (
               <div className="space-y-1">
                 <label className="text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">Имя</label>
@@ -226,10 +242,41 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               </div>
             </div>
 
+            {mode === 'register' && (
+              <label className="flex items-start gap-3 rounded-xl border border-white/10 bg-[#02050e] px-4 py-3">
+                <input
+                  type="checkbox"
+                  checked={registerConsent}
+                  onChange={(e) => setRegisterConsent(e.target.checked)}
+                  className="mt-1 h-4 w-4 rounded border-white/20 bg-transparent text-vibe-500 focus:ring-vibe-500"
+                />
+                <span className="text-sm text-slate-300 leading-snug">
+                  Я принимаю{' '}
+                  <a
+                    href="/agreement.pdf"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-vibe-400 hover:text-vibe-300 transition-colors underline underline-offset-4"
+                  >
+                    Пользовательское соглашение
+                  </a>{' '}
+                  и{' '}
+                  <a
+                    href="/privacy.docx"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-vibe-400 hover:text-vibe-300 transition-colors underline underline-offset-4"
+                  >
+                    Политику конфиденциальности
+                  </a>
+                </span>
+              </label>
+            )}
+
             <button 
               type="submit"
-              disabled={loading}
-              className="w-full mt-2 bg-gradient-to-r from-vibe-600 to-purple-600 hover:from-vibe-500 hover:to-purple-500 text-white font-bold py-3.5 rounded-xl shadow-[0_0_20px_rgba(124,58,237,0.3)] hover:shadow-[0_0_30px_rgba(124,58,237,0.5)] transition-all flex items-center justify-center gap-2 group disabled:opacity-70"
+              disabled={loading || !isFormValid || (mode === 'register' && !registerConsent)}
+              className="w-full mt-2 bg-gradient-to-r from-vibe-600 to-purple-600 hover:from-vibe-500 hover:to-purple-500 text-white font-bold py-3.5 rounded-xl shadow-[0_0_20px_rgba(124,58,237,0.3)] hover:shadow-[0_0_30px_rgba(124,58,237,0.5)] transition-all flex items-center justify-center gap-2 group disabled:opacity-70 disabled:cursor-not-allowed"
             >
               {loading ? (
                 <Loader2 className="w-5 h-5 animate-spin" />
