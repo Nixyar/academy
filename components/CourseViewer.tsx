@@ -205,6 +205,14 @@ interface CourseViewerProps {
   onProgressChange?: (courseId: string, progress: CourseProgress) => void;
 }
 
+// BOLT ⚡: This function is pure and does not depend on component state.
+// By defining it outside the component, we prevent it from being re-created on every render,
+// which is a micro-optimization that reduces memory allocation and garbage collection pressure.
+const getValueByPath = (source: unknown, path: string): unknown => {
+  if (!path) return undefined;
+  return path.split('.').reduce((acc: any, key) => (acc && typeof acc === 'object' ? acc[key] : undefined), source);
+};
+
 export const CourseViewer: React.FC<CourseViewerProps> = ({
   course,
   onBack,
@@ -335,11 +343,6 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     [course.id, syncProgress],
   );
 
-  const getValueByPath = useCallback((source: unknown, path: string): unknown => {
-    if (!path) return undefined;
-    return path.split('.').reduce((acc: any, key) => (acc && typeof acc === 'object' ? acc[key] : undefined), source);
-  }, []);
-
   const isNonEmpty = (value: unknown) => {
     if (value === null || value === undefined) return false;
     if (typeof value === 'string') return value.trim().length > 0;
@@ -385,7 +388,41 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
           return true;
       }
     },
-    [getValueByPath],
+    [],
+  );
+
+  const resolveUnlockPlaceholders = useCallback(
+    (rule: any): any => {
+      const substituteValue = (value: unknown) => {
+        if (typeof value !== 'string') return value;
+        const normalized = value.trim();
+        const stripSigils = normalized
+          .replace(/^\$\{?/, '')
+          .replace(/\}?$/, '');
+        const map: Record<string, string> = {
+          lessonId: activeLesson.id,
+          'lesson.id': activeLesson.id,
+          currentLessonId: activeLesson.id,
+          lesson_id: activeLesson.id,
+        };
+        return map[normalized] ?? map[stripSigils] ?? normalized;
+      };
+
+      if (Array.isArray(rule)) {
+        return rule.map((item) => resolveUnlockPlaceholders(item));
+      }
+
+      if (rule && typeof rule === 'object') {
+        const next: any = { ...rule };
+        if (next.allOf) next.allOf = resolveUnlockPlaceholders(next.allOf);
+        if (next.anyOf) next.anyOf = resolveUnlockPlaceholders(next.anyOf);
+        if ('value' in next) next.value = substituteValue(next.value);
+        return next;
+      }
+
+      return rule;
+    },
+    [activeLesson.id],
   );
 
   const resolveUnlockPlaceholders = useCallback(
@@ -1542,6 +1579,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     applyProgressPatch,
     cleanupStream,
     course.id,
+    isPromptReadOnly,
     isSendingPrompt,
     promptInput,
     startHtmlStream,
