@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { X, Mail, Lock, User as UserIcon, ArrowRight, Loader2, Chrome } from 'lucide-react';
 import { supabase } from '../services/supabaseClient';
-import { me, loginWithEmail, registerWithEmail } from '../services/authApi';
+import { acceptDocuments, me, loginWithEmail, registerWithEmail } from '../services/authApi';
 import { userFromProfile } from '../services/userFromProfile';
 import { ApiError } from '../services/apiClient';
 import type { User } from '../types';
@@ -100,6 +100,15 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           return;
         }
         throw err;
+      }
+
+      if (mode === 'register' && registerConsent) {
+        try {
+          profile = await acceptDocuments({ termsAccepted: true, privacyAccepted: true });
+        } catch (err) {
+          // Non-blocking: user will be prompted to confirm documents on next screen
+          console.warn('Failed to persist registration consent', err);
+        }
       }
       onAuthenticated(userFromProfile(profile));
       handleClose();

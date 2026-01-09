@@ -18,6 +18,8 @@ export function userFromProfile(profile: BackendProfile): User {
     plan: profile.plan,
     dailyLimit: profile.daily_limit,
     dailyUsed: profile.daily_used,
+    termsAccepted: Boolean(profile.terms_accepted),
+    privacyAccepted: Boolean(profile.privacy_accepted),
     progress: {},
     completedCourses: [],
   };

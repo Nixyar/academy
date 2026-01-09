@@ -64,6 +64,8 @@ export interface User {
   plan?: string;
   dailyLimit?: number;
   dailyUsed?: number;
+  termsAccepted?: boolean;
+  privacyAccepted?: boolean;
   progress: Record<string, CourseProgress>; // courseId -> progress object
   completedCourses: string[];
 }
