@@ -12,6 +12,9 @@ interface BackendCourse {
   label?: string | null;
   labels?: string[] | null;
   sort_order?: number | null;
+  price?: number | null;
+  sale_price?: number | null;
+  currency?: string | null;
 }
 
 interface BackendLesson {
@@ -86,6 +89,9 @@ function mapCourse(row: BackendCourse): Course {
     status: row.status,
     label,
     sortOrder: row.sort_order ?? null,
+    price: row.price ?? null,
+    salePrice: row.sale_price ?? null,
+    currency: row.currency ?? null,
     isFree: access !== 'pro',
     lessons: [],
   };

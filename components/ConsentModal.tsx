@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { acceptDocuments, type BackendProfile } from '../services/authApi';
 import { ApiError } from '../services/apiClient';
+import { useBodyScrollLock } from './useBodyScrollLock';
 
 type ConsentModalProps = {
   isOpen: boolean;
@@ -22,6 +23,7 @@ export const ConsentModal: React.FC<ConsentModalProps> = ({
   const [privacyChecked, setPrivacyChecked] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  useBodyScrollLock(isOpen);
 
   useEffect(() => {
     if (!isOpen) return;

@@ -3,6 +3,7 @@ import { LandingPage } from './components/LandingPage';
 import { CourseViewer } from './components/CourseViewer';
 import { AuthModal } from './components/AuthModal';
 import { ConsentModal } from './components/ConsentModal';
+import { PurchaseCourseModal } from './components/PurchaseCourseModal';
 import { ProfilePage } from './components/ProfilePage';
 import { AuthCallback } from './components/AuthCallback';
 import { Course, CourseProgress, User } from './types';
@@ -11,6 +12,7 @@ import { clearSupabaseStoredSession, supabase } from './services/supabaseClient'
 import { userFromProfile } from './services/userFromProfile';
 import { fetchCourseLessons, fetchCourses } from './services/coursesApi';
 import { fetchCoursesProgress } from './services/progressApi';
+import { fetchPurchasedCourseIds } from './services/purchasesApi';
 
 type View = 'landing' | 'course' | 'profile';
 
@@ -78,6 +80,10 @@ const App: React.FC = () => {
   const [bootstrapping, setBootstrapping] = useState(true);
   const [hasFetchedProfile, setHasFetchedProfile] = useState(false);
   const [consentModalOpen, setConsentModalOpen] = useState(false);
+  const [purchasedCourseIds, setPurchasedCourseIds] = useState<Set<string>>(() => new Set());
+  const purchasesFetchRef = useRef<Promise<Set<string>> | null>(null);
+  const [purchaseCourse, setPurchaseCourse] = useState<Course | null>(null);
+  const [purchaseModalOpen, setPurchaseModalOpen] = useState(false);
   const [courses, setCourses] = useState<Course[]>([]);
   const [lessonsLoadingFor, setLessonsLoadingFor] = useState<string | null>(null);
   const coursesLoadedRef = useRef(false);
@@ -122,6 +128,28 @@ const App: React.FC = () => {
 
   useEffect(() => {
     progressFetchKeyRef.current = null;
+  }, [user?.id]);
+
+  useEffect(() => {
+    purchasesFetchRef.current = null;
+    if (!user) {
+      setPurchasedCourseIds(new Set());
+    }
+  }, [user?.id]);
+
+  const ensurePurchasedCoursesLoaded = useCallback(async () => {
+    if (!user) return new Set<string>();
+    if (purchasesFetchRef.current) return purchasesFetchRef.current;
+
+    const promise = (async () => {
+      const ids = await fetchPurchasedCourseIds();
+      const next = new Set(ids);
+      setPurchasedCourseIds(next);
+      return next;
+    })();
+
+    purchasesFetchRef.current = promise;
+    return promise;
   }, [user?.id]);
 
   useEffect(() => {
@@ -239,6 +267,11 @@ const App: React.FC = () => {
       }
     })();
   }, []);
+
+  useEffect(() => {
+    if (!user || !hasFetchedProfile) return;
+    void ensurePurchasedCoursesLoaded();
+  }, [user?.id, hasFetchedProfile, ensurePurchasedCoursesLoaded]);
 
   useEffect(() => {
     if (!user || !hasFetchedProfile) return;
@@ -383,6 +416,18 @@ const App: React.FC = () => {
     const course = courses.find((c) => c.id === courseId);
     if (!course) return;
 
+    const accessLower = (course.access ?? '').toLowerCase();
+    const price = typeof course.price === 'number' ? course.price : 0;
+    const requiresPurchase = accessLower === 'paid' || accessLower === 'purchase' || accessLower === 'buy' || price > 0;
+    if (requiresPurchase) {
+      const purchased = purchasedCourseIds.has(course.id) || (await ensurePurchasedCoursesLoaded()).has(course.id);
+      if (!purchased) {
+        setPurchaseCourse(course);
+        setPurchaseModalOpen(true);
+        return;
+      }
+    }
+
     if (!course.isFree && !user.isSubscribed) {
       alert('Этот курс доступен только по подписке! Пожалуйста, оформите Vibe Pro.');
       return;
@@ -456,6 +501,11 @@ const App: React.FC = () => {
         onAuthenticated={handleAuthenticated}
         initialMode={authMode}
       />
+      <PurchaseCourseModal
+        isOpen={purchaseModalOpen}
+        course={purchaseCourse}
+        onClose={() => setPurchaseModalOpen(false)}
+      />
       {user ? (
         <ConsentModal
           isOpen={consentModalOpen}
@@ -483,9 +533,14 @@ const App: React.FC = () => {
         <ProfilePage
           user={user}
           courses={courses}
+          purchasedCourseIds={purchasedCourseIds}
           onLogout={handleLogout}
           onContinueCourse={(id) => {
             void handleSelectCourse(id);
+          }}
+          onPurchaseCourse={(course) => {
+            setPurchaseCourse(course);
+            setPurchaseModalOpen(true);
           }}
           onSubscribe={handleSubscribe}
         />

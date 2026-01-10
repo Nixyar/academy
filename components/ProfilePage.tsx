@@ -5,12 +5,14 @@ import { Zap, Crown, BookOpen, Clock, LogOut, ChevronRight, Play, Sparkles } fro
 interface ProfilePageProps {
   user: User;
   courses: Course[];
+  purchasedCourseIds: Set<string>;
   onLogout: () => void;
   onContinueCourse: (courseId: string) => void | Promise<void>;
+  onPurchaseCourse: (course: Course) => void;
   onSubscribe: () => void;
 }
 
-export const ProfilePage: React.FC<ProfilePageProps> = ({ user, courses, onLogout, onContinueCourse, onSubscribe }) => {
+export const ProfilePage: React.FC<ProfilePageProps> = ({ user, courses, purchasedCourseIds, onLogout, onContinueCourse, onPurchaseCourse, onSubscribe }) => {
   
   const getCourseProgressState = (courseId: string) => {
     const progress = user.progress?.[courseId];
@@ -53,6 +55,13 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, courses, onLogou
 
   const startedCourses = courses.filter((course) => getCourseProgressState(course.id).started);
   const notStartedCourses = courses.filter((course) => !getCourseProgressState(course.id).started);
+
+  const canAccessCourse = (course: Course) => {
+    const accessLower = (course.access ?? '').toLowerCase();
+    const price = typeof course.price === 'number' ? course.price : 0;
+    const requiresPurchase = accessLower === 'paid' || accessLower === 'purchase' || accessLower === 'buy' || price > 0;
+    return requiresPurchase ? purchasedCourseIds.has(course.id) : true;
+  };
 
   // Calculate mock stats
   const coursesInProgress = courses.reduce((count, course) => {
@@ -185,6 +194,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, courses, onLogou
                 const percent = totalLessons > 0 ? Math.round((completedLessons / totalLessons) * 100) : 0;
                 const isDraft = (course.status ?? '').toLowerCase() === 'draft';
                 const labels = getCourseLabels(course);
+                const canAccess = canAccessCourse(course);
 
                 return (
                     <div key={course.id} className="group bg-glass border border-white/5 rounded-2xl overflow-hidden hover:border-vibe-500/30 transition-all hover:-translate-y-1 hover:shadow-2xl hover:shadow-vibe-900/10">
@@ -237,18 +247,20 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, courses, onLogou
                             </div>
 
                             <button 
-                                onClick={isDraft ? undefined : () => onContinueCourse(course.id)}
+                                onClick={isDraft ? undefined : canAccess ? () => onContinueCourse(course.id) : () => onPurchaseCourse(course)}
                                 disabled={isDraft}
                                 className={`w-full py-3.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all
                                     ${isDraft
                                         ? 'bg-white/5 text-slate-500 border border-white/10 cursor-not-allowed opacity-70'
-                                        : isStarted 
-                                            ? 'bg-white/5 hover:bg-white/10 text-white border border-white/10' 
-                                            : 'bg-gradient-to-r from-vibe-600 to-purple-600 hover:from-vibe-500 hover:to-purple-500 text-white shadow-lg shadow-vibe-900/20'}
+                                        : canAccess
+                                          ? isStarted 
+                                              ? 'bg-white/5 hover:bg-white/10 text-white border border-white/10' 
+                                              : 'bg-gradient-to-r from-vibe-600 to-purple-600 hover:from-vibe-500 hover:to-purple-500 text-white shadow-lg shadow-vibe-900/20'
+                                          : 'bg-gradient-to-r from-vibe-600 to-purple-600 hover:from-vibe-500 hover:to-purple-500 text-white shadow-lg shadow-vibe-900/20'}
                                 `}
                             >
-                                {isDraft ? 'Скоро' : isStarted ? 'Продолжить' : 'Начать курс'}
-                                {isDraft ? null : isStarted ? <ChevronRight className="w-4 h-4" /> : <Play className="w-4 h-4 fill-current" />}
+                                {isDraft ? 'Скоро' : canAccess ? (isStarted ? 'Продолжить' : 'Начать курс') : 'Приобрести'}
+                                {isDraft ? null : canAccess ? (isStarted ? <ChevronRight className="w-4 h-4" /> : <Play className="w-4 h-4 fill-current" />) : null}
                             </button>
                         </div>
                     </div>
@@ -267,6 +279,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, courses, onLogou
               {notStartedCourses.map(course => {
                 const isDraft = (course.status ?? '').toLowerCase() === 'draft';
                 const labels = getCourseLabels(course);
+                const canAccess = canAccessCourse(course);
 
                 return (
                   <div key={course.id} className="group bg-glass border border-white/5 rounded-2xl overflow-hidden hover:border-vibe-500/30 transition-all hover:-translate-y-1 hover:shadow-2xl hover:shadow-vibe-900/10">
@@ -307,7 +320,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, courses, onLogou
                       ) : null}
 
                       <button
-                        onClick={isDraft ? undefined : () => onContinueCourse(course.id)}
+                        onClick={isDraft ? undefined : canAccess ? () => onContinueCourse(course.id) : () => onPurchaseCourse(course)}
                         disabled={isDraft}
                         className={`w-full py-3.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all
                           ${isDraft
@@ -315,8 +328,8 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, courses, onLogou
                             : 'bg-gradient-to-r from-vibe-600 to-purple-600 hover:from-vibe-500 hover:to-purple-500 text-white shadow-lg shadow-vibe-900/20'}
                         `}
                       >
-                        {isDraft ? 'Скоро' : 'Начать курс'}
-                        {isDraft ? null : <Play className="w-4 h-4 fill-current" />}
+                        {isDraft ? 'Скоро' : canAccess ? 'Начать курс' : 'Приобрести'}
+                        {isDraft ? null : canAccess ? <Play className="w-4 h-4 fill-current" /> : null}
                       </button>
                     </div>
                   </div>
