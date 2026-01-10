@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Shield, Timer, X } from 'lucide-react';
 import type { Course } from '../types';
 import { useBodyScrollLock } from './useBodyScrollLock';
+import { initTbankCoursePurchase } from '../services/paymentsApi';
+import { ApiError } from '../services/apiClient';
 
 type PurchaseCourseModalProps = {
   isOpen: boolean;
@@ -41,11 +43,15 @@ const calcDiscountPercent = (price: number | null | undefined, salePrice: number
 
 export const PurchaseCourseModal: React.FC<PurchaseCourseModalProps> = ({ isOpen, course, onClose }) => {
   const [offerAccepted, setOfferAccepted] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   useBodyScrollLock(isOpen);
 
   useEffect(() => {
     if (!isOpen) return;
     setOfferAccepted(false);
+    setIsSubmitting(false);
+    setError(null);
   }, [isOpen, course?.id]);
 
   const originalPriceLabel = useMemo(
@@ -65,6 +71,23 @@ export const PurchaseCourseModal: React.FC<PurchaseCourseModalProps> = ({ isOpen
   const buttonLabel = (course?.salePrice ?? null) === 0 ? 'Начать обучение бесплатно' : 'Приобрести';
 
   if (!isOpen || !course) return null;
+
+  const handlePurchase = async () => {
+    if (!offerAccepted || isSubmitting) return;
+    setIsSubmitting(true);
+    setError(null);
+    try {
+      const { paymentUrl } = await initTbankCoursePurchase(course.id);
+      window.location.href = paymentUrl;
+    } catch (e: any) {
+      const message =
+        e instanceof ApiError
+          ? 'Не удалось создать оплату. Попробуйте еще раз.'
+          : e?.message || 'Не удалось создать оплату.';
+      setError(message);
+      setIsSubmitting(false);
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-modal-fade-in">
@@ -176,20 +199,39 @@ export const PurchaseCourseModal: React.FC<PurchaseCourseModalProps> = ({ isOpen
 
           <button
             type="button"
-            disabled={!offerAccepted}
+            disabled={!offerAccepted || isSubmitting}
+            onClick={handlePurchase}
             className={`
               w-full relative h-14 rounded-xl font-bold text-white text-lg transition-all
               overflow-hidden group
-              ${offerAccepted ? 'opacity-100 scale-100 shadow-[0_0_20px_rgba(112,0,255,0.3)]' : 'opacity-50 scale-[0.98] cursor-not-allowed'}
+              ${offerAccepted && !isSubmitting ? 'opacity-100 scale-100 shadow-[0_0_20px_rgba(112,0,255,0.3)]' : 'opacity-50 scale-[0.98] cursor-not-allowed'}
             `}
           >
             <div className="absolute inset-0 bg-gradient-to-r from-[#00A3FF] to-[#7000FF] transition-transform duration-500 group-hover:scale-110 active:scale-95" />
-            <span className="relative z-10 flex items-center justify-center gap-2">{buttonLabel}</span>
+            <span className="relative z-10 flex items-center justify-center gap-2">
+              {isSubmitting ? (
+                <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path
+                    className="opacity-75"
+                    fill="currentColor"
+                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                  />
+                </svg>
+              ) : null}
+              {buttonLabel}
+            </span>
           </button>
 
           <div className="mt-3 text-center text-[11px] text-white/40">
             Оплачивая курс, вы соглашаетесь с условиями публичной оферты
           </div>
+
+          {error ? (
+            <div className="mt-4 text-center text-sm text-red-300 bg-red-500/10 border border-red-500/20 rounded-2xl p-3">
+              {error}
+            </div>
+          ) : null}
 
           <div className="mt-6 pt-6 border-t border-white/5 flex items-center justify-center gap-6 opacity-40">
             <div className="flex items-center gap-1.5 text-[12px] font-medium text-white">
