@@ -5,6 +5,7 @@ import { acceptDocuments, me, loginWithEmail, registerWithEmail } from '../servi
 import { userFromProfile } from '../services/userFromProfile';
 import { ApiError } from '../services/apiClient';
 import type { User } from '../types';
+import { useBodyScrollLock } from './useBodyScrollLock';
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -30,6 +31,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [oauthInProgress, setOauthInProgress] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+  useBodyScrollLock(isOpen);
 
   const resetForm = useCallback(() => {
     setEmail('');

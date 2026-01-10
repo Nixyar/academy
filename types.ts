@@ -8,6 +8,9 @@ export interface Course {
   status?: string | null;
   label?: string | string[] | null;
   sortOrder?: number | null;
+  price?: number | null;
+  salePrice?: number | null;
+  currency?: string | null;
   isFree: boolean;
   lessons: Lesson[];
 }
