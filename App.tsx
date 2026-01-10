@@ -4,6 +4,7 @@ import { CourseViewer } from './components/CourseViewer';
 import { AuthModal } from './components/AuthModal';
 import { ConsentModal } from './components/ConsentModal';
 import { PurchaseCourseModal } from './components/PurchaseCourseModal';
+import { PaymentResultModal } from './components/PaymentResultModal';
 import { ProfilePage } from './components/ProfilePage';
 import { AuthCallback } from './components/AuthCallback';
 import { Course, CourseProgress, User } from './types';
@@ -13,6 +14,7 @@ import { userFromProfile } from './services/userFromProfile';
 import { fetchCourseLessons, fetchCourses } from './services/coursesApi';
 import { fetchCoursesProgress } from './services/progressApi';
 import { fetchPurchasedCourseIds } from './services/purchasesApi';
+import { syncTbankCoursePurchase } from './services/paymentsApi';
 
 type View = 'landing' | 'course' | 'profile';
 
@@ -84,6 +86,10 @@ const App: React.FC = () => {
   const purchasesFetchRef = useRef<Promise<Set<string>> | null>(null);
   const [purchaseCourse, setPurchaseCourse] = useState<Course | null>(null);
   const [purchaseModalOpen, setPurchaseModalOpen] = useState(false);
+  const [paymentResult, setPaymentResult] = useState<{ open: boolean; status: 'success' | 'fail' | 'pending' }>({
+    open: false,
+    status: 'pending',
+  });
   const [courses, setCourses] = useState<Course[]>([]);
   const [lessonsLoadingFor, setLessonsLoadingFor] = useState<string | null>(null);
   const coursesLoadedRef = useRef(false);
@@ -151,6 +157,11 @@ const App: React.FC = () => {
     purchasesFetchRef.current = promise;
     return promise;
   }, [user?.id]);
+
+  const refreshPurchasedCourses = useCallback(async () => {
+    purchasesFetchRef.current = null;
+    return ensurePurchasedCoursesLoaded();
+  }, [ensurePurchasedCoursesLoaded]);
 
   useEffect(() => {
     if (isAuthCallbackPath) return;
@@ -272,6 +283,35 @@ const App: React.FC = () => {
     if (!user || !hasFetchedProfile) return;
     void ensurePurchasedCoursesLoaded();
   }, [user?.id, hasFetchedProfile, ensurePurchasedCoursesLoaded]);
+
+  useEffect(() => {
+    if (!user) return;
+    if (route.view !== 'profile') return;
+
+    const params = new URLSearchParams(window.location.search);
+    const payment = params.get('payment');
+    const orderId = params.get('orderId');
+    if (!payment || !orderId) return;
+    if (payment !== 'success' && payment !== 'fail') return;
+
+    setPaymentResult({ open: true, status: 'pending' });
+
+    (async () => {
+      try {
+        const result = await syncTbankCoursePurchase(orderId);
+        const status = String(result?.status || '').toLowerCase();
+        const paid = Boolean(result?.paidAt) || status === 'confirmed' || status === 'paid';
+        setPaymentResult({ open: true, status: paid ? 'success' : 'fail' });
+        if (paid) {
+          await refreshPurchasedCourses();
+        }
+      } catch {
+        setPaymentResult({ open: true, status: payment === 'success' ? 'pending' : 'fail' });
+      } finally {
+        window.history.replaceState({}, '', '/profile');
+      }
+    })();
+  }, [route.view, user?.id, refreshPurchasedCourses]);
 
   useEffect(() => {
     if (!user || !hasFetchedProfile) return;
@@ -500,6 +540,11 @@ const App: React.FC = () => {
         onClose={() => setAuthModalOpen(false)}
         onAuthenticated={handleAuthenticated}
         initialMode={authMode}
+      />
+      <PaymentResultModal
+        isOpen={paymentResult.open}
+        status={paymentResult.status}
+        onClose={() => setPaymentResult((prev) => ({ ...prev, open: false }))}
       />
       <PurchaseCourseModal
         isOpen={purchaseModalOpen}

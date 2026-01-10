@@ -1545,7 +1545,6 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     applyProgressPatch,
     cleanupStream,
     course.id,
-    isPromptReadOnly,
     isSendingPrompt,
     promptInput,
     startHtmlStream,
