@@ -37,10 +37,12 @@ function sleep(ms: number): Promise<void> {
 export async function apiFetch<T>(
   path: string,
   init: RequestInit = {},
-  opts: { retryOn401?: boolean; retryCount?: number } = {},
+  opts: { retryOn401?: boolean; retryCount?: number; retry?: boolean } = {},
 ): Promise<T> {
   const retryOn401 = opts.retryOn401 ?? true;
   const retryCount = opts.retryCount ?? 0;
+  const method = String(init.method || 'GET').toUpperCase();
+  const retryEnabled = opts.retry ?? (method === 'GET' || method === 'HEAD');
   const url = `${API_BASE_URL}${path}`;
 
   const headers = new Headers(init.headers);
@@ -55,7 +57,7 @@ export async function apiFetch<T>(
     });
   } catch (fetchError) {
     // Network error - retry if we haven't exhausted retries
-    if (retryCount < MAX_RETRIES) {
+    if (retryEnabled && retryCount < MAX_RETRIES) {
       const delay = RETRY_DELAYS_MS[retryCount] ?? 1000;
       await sleep(delay);
       return apiFetch<T>(path, init, { ...opts, retryCount: retryCount + 1 });
@@ -72,7 +74,7 @@ export async function apiFetch<T>(
   }
 
   // Retry on transient errors (502, 503, 504)
-  if (RETRYABLE_STATUS_CODES.has(response.status) && retryCount < MAX_RETRIES) {
+  if (retryEnabled && RETRYABLE_STATUS_CODES.has(response.status) && retryCount < MAX_RETRIES) {
     const delay = RETRY_DELAYS_MS[retryCount] ?? 1000;
     console.warn(`[apiFetch] Retrying ${path} after ${response.status} (attempt ${retryCount + 1}/${MAX_RETRIES})`);
     await sleep(delay);
