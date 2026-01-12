@@ -9,12 +9,15 @@ const inFlightCoursesProgress = new Map<string, Promise<Record<string, CoursePro
 const PROGRESS_CACHE_TTL_MS = 5000;
 const progressCache = new Map<string, { expiresAt: number; value: CourseProgress }>();
 
+const coursesProgressCache = new Map<string, { expiresAt: number; value: Record<string, CourseProgress> }>();
+
 export function invalidateProgressCache(courseId?: string): void {
   if (courseId) {
     progressCache.delete(String(courseId));
   } else {
     progressCache.clear();
   }
+  coursesProgressCache.clear();
 }
 
 export type CourseProgressPatch =
@@ -135,12 +138,20 @@ export async function fetchCourseResume(courseId: string): Promise<ResumeRespons
 
 export async function fetchCoursesProgress(
   courseIds: string[],
+  opts?: { skipCache?: boolean },
 ): Promise<Record<string, CourseProgress>> {
   if (courseIds.length === 0) return {};
 
   const uniqueIds = Array.from(new Set(courseIds.map((id) => String(id)).filter(Boolean)));
   const canonicalIds = [...uniqueIds].sort();
   const key = canonicalIds.join(',');
+
+  if (!opts?.skipCache) {
+    const cached = coursesProgressCache.get(key);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.value;
+    }
+  }
 
   const existing = inFlightCoursesProgress.get(key);
   if (existing) return existing;
@@ -150,10 +161,17 @@ export async function fetchCoursesProgress(
     const response = await apiFetch<ProgressMapResponse>(`/api/progress?courseIds=${query}`);
     const progressMap = response.progress ?? {};
 
-    return courseIds.reduce<Record<string, CourseProgress>>((acc, id) => {
+    const result = courseIds.reduce<Record<string, CourseProgress>>((acc, id) => {
       acc[id] = normalizeCourseProgress(progressMap[id] ?? {});
       return acc;
     }, {});
+
+    coursesProgressCache.set(canonicalIds.join(','), {
+      expiresAt: Date.now() + PROGRESS_CACHE_TTL_MS,
+      value: result,
+    });
+
+    return result;
   })();
 
   inFlightCoursesProgress.set(key, promise);
