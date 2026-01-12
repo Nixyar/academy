@@ -1578,7 +1578,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     if (activeJobStatus !== 'done') return;
     if (!isActiveJobForLesson) return;
     if (!activeJobId) return;
-    if (storedWorkspace.source === 'files') return;
+    if (storedWorkspace.source === 'files' || hasStoredFilesResult) return;
     if (savedResultHtml && savedResultHtml.trim()) return;
     if (fetchedResultJobIdRef.current === activeJobId) return;
 
