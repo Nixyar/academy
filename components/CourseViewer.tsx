@@ -1159,10 +1159,42 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
       setLlmSectionOrder(mergedOrder);
 
       const htmlFromPayload = typeof payload?.html === 'string' ? payload.html : null;
+      const workspaceFiles = (payload?.result?.files || payload?.files) as Record<string, string> | undefined;
+      const activeFile = (payload?.result?.active_file || payload?.active_file) as string | undefined;
+
+      // Update the progress object's result if we have a full workspace update
+      if (workspaceFiles) {
+        setCourseProgress((prev) => {
+          if (!prev) return prev;
+          const currentResult = (prev as any).result || {};
+          const payloadMeta = (payload?.result?.meta || payload?.meta || {}) as Record<string, any>;
+
+          return {
+            ...prev,
+            result: {
+              ...currentResult,
+              files: workspaceFiles,
+              active_file: activeFile || currentResult.active_file || 'index.html',
+              meta: {
+                ...(currentResult.meta || {}),
+                ...payloadMeta,
+              },
+            },
+          };
+        });
+
+        // If we switched files or updated the active one, reflect that in UI
+        if (activeFile) {
+          setUiActiveFile(activeFile);
+        }
+      }
+
       const finalHtml =
         htmlFromPayload && htmlFromPayload.trim().length > 0
           ? htmlFromPayload
-          : buildHtml(nextCss ?? null, nextOutline, mergedSections, mergedOrder);
+          : workspaceFiles && activeFile && workspaceFiles[activeFile]
+            ? workspaceFiles[activeFile]
+            : buildHtml(nextCss ?? null, nextOutline, mergedSections, mergedOrder);
 
       if (finalHtml?.trim().length) setLlmHtml(finalHtml);
 
@@ -1281,9 +1313,9 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
       if (eventName === 'done') {
         const finalPayload =
           payload &&
-          typeof payload === 'object' &&
-          typeof (payload as any).html !== 'string' &&
-          typeof (payload as any).content === 'string'
+            typeof payload === 'object' &&
+            typeof (payload as any).html !== 'string' &&
+            typeof (payload as any).content === 'string'
             ? { ...(payload as any), html: (payload as any).content }
             : payload ?? {};
         applyFinalPayload(finalPayload, { final: true });
@@ -1949,8 +1981,8 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
                           type="button"
                           onClick={() => handleQuizSelect(idx, option)}
                           className={`w-full text-left px-4 py-3 rounded-xl border transition-colors ${quizAnswer === idx
-                              ? 'bg-green-500/10 border-green-400/40 text-green-100'
-                              : 'bg-[#070c18] border-white/5 text-slate-200 hover:border-vibe-500/30 hover:bg-white/5'
+                            ? 'bg-green-500/10 border-green-400/40 text-green-100'
+                            : 'bg-[#070c18] border-white/5 text-slate-200 hover:border-vibe-500/30 hover:bg-white/5'
                             }`}
                           style={{ cursor: 'pointer' }}
                         >
