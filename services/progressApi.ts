@@ -1,8 +1,21 @@
 import { apiFetch } from './apiClient';
 import type { CourseProgress, LessonStatus } from '../types';
 
+// In-flight deduplication
 const inFlightCourseProgress = new Map<string, Promise<CourseProgress>>();
 const inFlightCoursesProgress = new Map<string, Promise<Record<string, CourseProgress>>>();
+
+// Short-term cache to avoid redundant requests (5 second TTL)
+const PROGRESS_CACHE_TTL_MS = 5000;
+const progressCache = new Map<string, { expiresAt: number; value: CourseProgress }>();
+
+export function invalidateProgressCache(courseId?: string): void {
+  if (courseId) {
+    progressCache.delete(String(courseId));
+  } else {
+    progressCache.clear();
+  }
+}
 
 export type CourseProgressPatch =
   | { op: 'quiz_answer'; lessonId: string; quizId: string; answer: unknown }
@@ -13,7 +26,7 @@ export type CourseProgressPatch =
   // HTML workspace navigation (multi-page preview)
   | { op: 'set_active_file'; lessonId: string; active_file: string; file?: string }
   // Allow backend to introduce new patch ops without breaking the frontend build.
-  | { op: string; [key: string]: unknown };
+  | { op: string;[key: string]: unknown };
 
 type ProgressEnvelope = { course_id?: string; progress?: CourseProgress };
 type ProgressMapResponse = { progress?: Record<string, CourseProgress | undefined> };
@@ -28,8 +41,21 @@ function normalizeCourseProgress(payload: unknown): CourseProgress {
   return payload as CourseProgress;
 }
 
-export async function fetchCourseProgress(courseId: string): Promise<CourseProgress> {
+export async function fetchCourseProgress(
+  courseId: string,
+  opts?: { skipCache?: boolean },
+): Promise<CourseProgress> {
   const key = String(courseId);
+
+  // Check cache first (unless skipCache is true)
+  if (!opts?.skipCache) {
+    const cached = progressCache.get(key);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.value;
+    }
+  }
+
+  // Check for in-flight request
   const existing = inFlightCourseProgress.get(key);
   if (existing) return existing;
 
@@ -37,7 +63,15 @@ export async function fetchCourseProgress(courseId: string): Promise<CourseProgr
     const response = await apiFetch<ProgressEnvelope | CourseProgress | null>(
       `/api/courses/${courseId}/progress`,
     );
-    return normalizeCourseProgress(response);
+    const result = normalizeCourseProgress(response);
+
+    // Update cache
+    progressCache.set(key, {
+      expiresAt: Date.now() + PROGRESS_CACHE_TTL_MS,
+      value: result,
+    });
+
+    return result;
   })();
 
   inFlightCourseProgress.set(key, promise);
@@ -62,7 +96,15 @@ export async function upsertCourseProgress(
       body: JSON.stringify({ progress }),
     },
   );
-  return normalizeCourseProgress(response);
+  const result = normalizeCourseProgress(response);
+
+  // Update cache with fresh data
+  progressCache.set(String(courseId), {
+    expiresAt: Date.now() + PROGRESS_CACHE_TTL_MS,
+    value: result,
+  });
+
+  return result;
 }
 
 export async function patchCourseProgress(
@@ -76,7 +118,15 @@ export async function patchCourseProgress(
       body: JSON.stringify(patch),
     },
   );
-  return normalizeCourseProgress(response);
+  const result = normalizeCourseProgress(response);
+
+  // Update cache with fresh data
+  progressCache.set(String(courseId), {
+    expiresAt: Date.now() + PROGRESS_CACHE_TTL_MS,
+    value: result,
+  });
+
+  return result;
 }
 
 export async function fetchCourseResume(courseId: string): Promise<ResumeResponse> {
