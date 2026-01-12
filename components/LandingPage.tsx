@@ -1,6 +1,6 @@
 import React from 'react';
 import { Course, User } from '../types';
-import { Play, Code, Zap, Rocket, Sparkles, Terminal, Shield } from 'lucide-react';
+import { Code, Zap, Rocket, Sparkles, Terminal } from 'lucide-react';
 import { CoursesSlider } from './CoursesSlider';
 
 interface LandingPageProps {
