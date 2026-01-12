@@ -168,7 +168,7 @@ function extractCtaData(blocks: unknown[]): { buttonText: string | null; action:
 function describeApiError(error: unknown, fallback: string): string {
   if (error instanceof ApiError) {
     const body = error.body as any;
-    const fromBody = body?.error || body?.message;
+    const fromBody = body?.message || body?.error;
     return typeof fromBody === 'string' && fromBody.trim() ? fromBody : fallback;
   }
   if (error instanceof Error) return error.message || fallback;
@@ -1084,6 +1084,9 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
   useEffect(() => {
     const handler = (event: MessageEvent) => {
       if (event.source !== previewIframeRef.current?.contentWindow) return;
+      // When sandboxed without allow-same-origin, srcdoc iframes have origin "null".
+      // If the sandbox settings change, still accept same-origin messages.
+      if (event.origin !== 'null' && event.origin !== window.location.origin) return;
       const data = event.data;
       if (!data || typeof data !== 'object') return;
       if ((data as any).type !== 'NAVIGATE_FILE') return;
@@ -1675,16 +1678,16 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
             <div className="flex-1 border-b border-white/5 relative overflow-hidden">
               {hasRenderablePreview ? (
                 <div className="absolute inset-0 flex flex-col">
-                  <iframe
-                    ref={previewIframeRef}
-                    key={`${activeLesson.id}-${uiActiveFile}`}
-                    srcDoc={iframeSrcDoc}
-                    title="LLM Generated Site"
-                    className="w-full flex-1 bg-black"
-                    sandbox="allow-scripts allow-same-origin"
-                  />
-                </div>
-              ) : (
+	                  <iframe
+	                    ref={previewIframeRef}
+	                    key={`${activeLesson.id}-${uiActiveFile}`}
+	                    srcDoc={iframeSrcDoc}
+	                    title="LLM Generated Site"
+	                    className="w-full flex-1 bg-black"
+	                    sandbox="allow-scripts"
+	                  />
+	                </div>
+	              ) : (
                 <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-400 gap-3 p-6 text-center">
                   {isSendingPrompt ? (
                     <>

@@ -82,8 +82,8 @@ export async function apiFetch<T>(
   if (!response.ok) {
     const body = await readJsonSafe(response);
     const message =
-      (body as any)?.error ||
       (body as any)?.message ||
+      (body as any)?.error ||
       `Request failed: ${response.status} ${response.statusText}`;
     throw new ApiError(String(message), response.status, body);
   }
