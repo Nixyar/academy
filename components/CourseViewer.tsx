@@ -468,31 +468,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
           ? course.lessons.findIndex((lesson) => lesson.id === resumeLessonId)
           : -1;
 
-        if (resumeIndex >= 0 && resumeIndex !== activeLessonIndex) {
-          setActiveLessonIndex(resumeIndex);
-        }
-
-        const currentLesson = course.lessons[resumeIndex >= 0 ? resumeIndex : 0];
-        if (currentLesson) {
-          if ((progressData as any)?.course_status === 'completed') return;
-
-          const status = progressData?.lessons?.[currentLesson.id]?.status;
-
-          if (status !== 'completed') {
-            await applyProgressPatch({
-              op: 'lesson_status',
-              lessonId: currentLesson.id,
-              status: 'in_progress',
-            });
-          }
-
-          if (progressData?.resume_lesson_id !== currentLesson.id) {
-            await applyProgressPatch({
-              op: 'set_resume',
-              lessonId: currentLesson.id,
-            });
-          }
-        }
+        if (resumeIndex >= 0) setActiveLessonIndex(resumeIndex);
       } catch (error) {
         console.error('Failed to load course progress', error);
       } finally {
@@ -503,7 +479,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [activeLessonIndex, applyProgressPatch, course.id, course.lessons, lessonIdsKey, syncProgress]);
+  }, [course.id, lessonIdsKey, syncProgress]);
 
   const isWorkshopLesson = useMemo(
     () => (activeLesson.lessonType ?? '').toLowerCase() === 'workshop',

@@ -1,6 +1,9 @@
 import { apiFetch } from './apiClient';
 import type { CourseProgress, LessonStatus } from '../types';
 
+const inFlightCourseProgress = new Map<string, Promise<CourseProgress>>();
+const inFlightCoursesProgress = new Map<string, Promise<Record<string, CourseProgress>>>();
+
 export type CourseProgressPatch =
   | { op: 'quiz_answer'; lessonId: string; quizId: string; answer: unknown }
   | { op: 'lesson_status'; lessonId: string; status: LessonStatus; completedAt?: string | null }
@@ -26,10 +29,26 @@ function normalizeCourseProgress(payload: unknown): CourseProgress {
 }
 
 export async function fetchCourseProgress(courseId: string): Promise<CourseProgress> {
-  const response = await apiFetch<ProgressEnvelope | CourseProgress | null>(
-    `/api/courses/${courseId}/progress`,
-  );
-  return normalizeCourseProgress(response);
+  const key = String(courseId);
+  const existing = inFlightCourseProgress.get(key);
+  if (existing) return existing;
+
+  const promise = (async () => {
+    const response = await apiFetch<ProgressEnvelope | CourseProgress | null>(
+      `/api/courses/${courseId}/progress`,
+    );
+    return normalizeCourseProgress(response);
+  })();
+
+  inFlightCourseProgress.set(key, promise);
+
+  try {
+    return await promise;
+  } finally {
+    if (inFlightCourseProgress.get(key) === promise) {
+      inFlightCourseProgress.delete(key);
+    }
+  }
 }
 
 export async function upsertCourseProgress(
@@ -68,12 +87,32 @@ export async function fetchCoursesProgress(
   courseIds: string[],
 ): Promise<Record<string, CourseProgress>> {
   if (courseIds.length === 0) return {};
-  const query = encodeURIComponent(courseIds.join(','));
-  const response = await apiFetch<ProgressMapResponse>(`/api/progress?courseIds=${query}`);
-  const progressMap = response.progress ?? {};
 
-  return courseIds.reduce<Record<string, CourseProgress>>((acc, id) => {
-    acc[id] = normalizeCourseProgress(progressMap[id] ?? {});
-    return acc;
-  }, {});
+  const uniqueIds = Array.from(new Set(courseIds.map((id) => String(id)).filter(Boolean)));
+  const canonicalIds = [...uniqueIds].sort();
+  const key = canonicalIds.join(',');
+
+  const existing = inFlightCoursesProgress.get(key);
+  if (existing) return existing;
+
+  const promise = (async () => {
+    const query = encodeURIComponent(canonicalIds.join(','));
+    const response = await apiFetch<ProgressMapResponse>(`/api/progress?courseIds=${query}`);
+    const progressMap = response.progress ?? {};
+
+    return courseIds.reduce<Record<string, CourseProgress>>((acc, id) => {
+      acc[id] = normalizeCourseProgress(progressMap[id] ?? {});
+      return acc;
+    }, {});
+  })();
+
+  inFlightCoursesProgress.set(key, promise);
+
+  try {
+    return await promise;
+  } finally {
+    if (inFlightCoursesProgress.get(key) === promise) {
+      inFlightCoursesProgress.delete(key);
+    }
+  }
 }
