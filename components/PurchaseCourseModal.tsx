@@ -82,7 +82,7 @@ export const PurchaseCourseModal: React.FC<PurchaseCourseModalProps> = ({ isOpen
     } catch (e: any) {
       const message =
         e instanceof ApiError
-          ? 'Не удалось создать оплату. Попробуйте еще раз.'
+          ? (e.message || 'Не удалось создать оплату.')
           : e?.message || 'Не удалось создать оплату.';
       setError(message);
       setIsSubmitting(false);
