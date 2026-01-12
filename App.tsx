@@ -251,16 +251,27 @@ const App: React.FC = () => {
           const course = currentCourses.find(c => c.slug === currentRoute.courseSlug || c.id === currentRoute.courseSlug);
           if (course) {
             try {
-              const [progressMap, lessons] = await Promise.all([
+              const [progressResult, lessonsResult] = await Promise.allSettled([
                 fetchCoursesProgress([course.id]),
-                fetchCourseLessons(course.id)
+                fetchCourseLessons(course.id),
               ]);
 
-              setCourses(prev => prev.map(c => c.id === course.id ? { ...c, lessons } : c));
-              setUser(prev => prev ? {
-                ...prev,
-                progress: { ...(prev.progress ?? {}), ...progressMap }
-              } : prev);
+              if (lessonsResult.status === 'fulfilled') {
+                const lessons = lessonsResult.value;
+                setCourses(prev => prev.map(c => c.id === course.id ? { ...c, lessons } : c));
+              } else {
+                console.error('Failed to pre-fetch course lessons', lessonsResult.reason);
+              }
+
+              if (progressResult.status === 'fulfilled') {
+                const progressMap = progressResult.value;
+                setUser(prev => prev ? {
+                  ...prev,
+                  progress: { ...(prev.progress ?? {}), ...progressMap }
+                } : prev);
+              } else {
+                console.error('Failed to pre-fetch course progress', progressResult.reason);
+              }
             } catch (err) {
               console.error('Failed to pre-fetch course data', err);
             }

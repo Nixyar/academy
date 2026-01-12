@@ -20,13 +20,9 @@ export const LandingPage: React.FC<LandingPageProps> = ({
   onOpenAuth,
   onGoToProfile,
 }) => {
-  const isSubscribed = user?.isSubscribed || false;
-
   const handleHeroAction = () => {
     if (user) {
-      if (courses.length > 0) {
-        onSelectCourse(courses[0].id);
-      }
+      onGoToProfile();
     } else {
       onOpenAuth('login');
     }
