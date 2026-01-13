@@ -14,6 +14,7 @@ import { userFromProfile } from './services/userFromProfile';
 import { fetchCourseLessons, fetchCourses } from './services/coursesApi';
 import { fetchCoursesProgress } from './services/progressApi';
 import { syncTbankCoursePurchase } from './services/paymentsApi';
+import { ApiError } from './services/apiClient';
 
 type View = 'landing' | 'course' | 'profile';
 
@@ -479,6 +480,15 @@ const App: React.FC = () => {
     [],
   );
 
+  const toUserFacingMessage = (error: unknown, fallback: string) => {
+    if (error instanceof ApiError) return error.message || fallback;
+    const message = error instanceof Error ? error.message : '';
+    if (/^Minified React error #\d+/i.test(message) || message.includes('react.dev/errors/')) {
+      return fallback;
+    }
+    return message || fallback;
+  };
+
   const handleSelectCourse = async (
     courseId: string,
     options?: { skipPathUpdate?: boolean },
@@ -520,8 +530,7 @@ const App: React.FC = () => {
           prev.map((c) => (c.id === courseId ? { ...c, lessons } : c)),
         );
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Не удалось загрузить уроки.';
-        alert(message);
+        alert(toUserFacingMessage(error, 'Не удалось загрузить уроки. Попробуйте ещё раз.'));
         setLessonsLoadingFor(null);
         return;
       }
