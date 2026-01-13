@@ -5,6 +5,7 @@ import { Zap, Crown, BookOpen, Clock, LogOut, ChevronRight, Play, Sparkles } fro
 interface ProfilePageProps {
   user: User;
   courses: Course[];
+  progressLoaded?: boolean;
   purchasedCourseIds: Set<string>;
   onLogout: () => void;
   onContinueCourse: (courseId: string) => void | Promise<void>;
@@ -12,7 +13,7 @@ interface ProfilePageProps {
   onSubscribe: () => void;
 }
 
-export const ProfilePage: React.FC<ProfilePageProps> = ({ user, courses, purchasedCourseIds, onLogout, onContinueCourse, onPurchaseCourse, onSubscribe }) => {
+export const ProfilePage: React.FC<ProfilePageProps> = ({ user, courses, progressLoaded, purchasedCourseIds, onLogout, onContinueCourse, onPurchaseCourse, onSubscribe }) => {
   
   const getCourseProgressState = (courseId: string) => {
     const progress = user.progress?.[courseId];
@@ -55,6 +56,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, courses, purchas
 
   const startedCourses = courses.filter((course) => getCourseProgressState(course.id).started);
   const notStartedCourses = courses.filter((course) => !getCourseProgressState(course.id).started);
+  const showContinueSection = Boolean(progressLoaded) && startedCourses.length > 0;
 
   const canAccessCourse = (course: Course) => {
     const accessLower = (course.access ?? '').toLowerCase();
@@ -175,20 +177,16 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, courses, purchas
             */}
         </div>
 
-        {/* My Courses Section */}
-        <h2 className="text-2xl font-bold font-display mb-6 flex items-center gap-2">
-            <Clock className="w-6 h-6 text-vibe-400" />
-            Продолжить обучение
-        </h2>
+        {showContinueSection ? (
+          <>
+            {/* My Courses Section */}
+            <h2 className="text-2xl font-bold font-display mb-6 flex items-center gap-2">
+              <Clock className="w-6 h-6 text-vibe-400" />
+              Продолжить обучение
+            </h2>
 
-        {startedCourses.length === 0 && (
-          <div className="bg-glass border border-white/5 rounded-2xl p-6 text-slate-300 mb-12">
-            Вы ещё не начали ни одного курса.
-          </div>
-        )}
-
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-12">
-            {startedCourses.map(course => {
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-12">
+              {startedCourses.map(course => {
                 const { completedLessons, totalLessonsFromProgress, started: isStarted } = getCourseProgressState(course.id);
                 const totalLessons = course.lessons.length || totalLessonsFromProgress;
                 const percent = totalLessons > 0 ? Math.round((completedLessons / totalLessons) * 100) : 0;
@@ -265,8 +263,10 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, courses, purchas
                         </div>
                     </div>
                 )
-            })}
-        </div>
+              })}
+            </div>
+          </>
+        ) : null}
 
         {notStartedCourses.length > 0 && (
           <>
