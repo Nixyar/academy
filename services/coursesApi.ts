@@ -15,6 +15,7 @@ interface BackendCourse {
   price?: number | null;
   sale_price?: number | null;
   currency?: string | null;
+  is_purchased?: boolean | null;
 }
 
 interface BackendLesson {
@@ -92,6 +93,7 @@ function mapCourse(row: BackendCourse): Course {
     price: row.price ?? null,
     salePrice: row.sale_price ?? null,
     currency: row.currency ?? null,
+    isPurchased: Boolean(row.is_purchased),
     isFree: access !== 'pro',
     lessons: [],
   };

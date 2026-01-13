@@ -13,7 +13,6 @@ import { clearSupabaseStoredSession, supabase } from './services/supabaseClient'
 import { userFromProfile } from './services/userFromProfile';
 import { fetchCourseLessons, fetchCourses } from './services/coursesApi';
 import { fetchCoursesProgress } from './services/progressApi';
-import { fetchPurchasedCourseIds } from './services/purchasesApi';
 import { syncTbankCoursePurchase } from './services/paymentsApi';
 
 type View = 'landing' | 'course' | 'profile';
@@ -143,24 +142,50 @@ const App: React.FC = () => {
     }
   }, [user?.id]);
 
+  const derivePurchasedCourseIds = useCallback((list: Course[]) => {
+    return new Set(
+      (list || [])
+        .filter((course) => Boolean(course?.isPurchased))
+        .map((course) => course.id),
+    );
+  }, []);
+
   const ensurePurchasedCoursesLoaded = useCallback(async () => {
     if (!user) return new Set<string>();
     if (purchasesFetchRef.current) return purchasesFetchRef.current;
 
     const promise = (async () => {
-      const ids = await fetchPurchasedCourseIds();
-      const next = new Set(ids);
+      let currentCourses = courses;
+      if (currentCourses.length === 0) {
+        try {
+          currentCourses = await fetchCourses();
+          setCourses(currentCourses);
+          coursesLoadedRef.current = true;
+        } catch {
+          // ignore
+        }
+      }
+      const next = derivePurchasedCourseIds(currentCourses);
       setPurchasedCourseIds(next);
       return next;
     })();
 
     purchasesFetchRef.current = promise;
     return promise;
-  }, [user?.id]);
+  }, [user?.id, courses, derivePurchasedCourseIds]);
 
   const refreshPurchasedCourses = useCallback(async () => {
     purchasesFetchRef.current = null;
-    return ensurePurchasedCoursesLoaded();
+    try {
+      const currentCourses = await fetchCourses();
+      setCourses(currentCourses);
+      coursesLoadedRef.current = true;
+      const next = derivePurchasedCourseIds(currentCourses);
+      setPurchasedCourseIds(next);
+      return next;
+    } catch {
+      return ensurePurchasedCoursesLoaded();
+    }
   }, [ensurePurchasedCoursesLoaded]);
 
   useEffect(() => {
@@ -471,7 +496,10 @@ const App: React.FC = () => {
     const price = typeof course.price === 'number' ? course.price : 0;
     const requiresPurchase = accessLower === 'paid' || accessLower === 'purchase' || accessLower === 'buy' || price > 0;
     if (requiresPurchase) {
-      const purchased = purchasedCourseIds.has(course.id) || (await ensurePurchasedCoursesLoaded()).has(course.id);
+      const purchased =
+        Boolean(course.isPurchased) ||
+        purchasedCourseIds.has(course.id) ||
+        (await ensurePurchasedCoursesLoaded()).has(course.id);
       if (!purchased) {
         setPurchaseCourse(course);
         setPurchaseModalOpen(true);
