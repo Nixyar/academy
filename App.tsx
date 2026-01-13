@@ -90,6 +90,7 @@ const App: React.FC = () => {
     open: false,
     status: 'pending',
   });
+  const [hasLoadedProgressList, setHasLoadedProgressList] = useState(false);
   const [courses, setCourses] = useState<Course[]>([]);
   const [lessonsLoadingFor, setLessonsLoadingFor] = useState<string | null>(null);
   const coursesLoadedRef = useRef(false);
@@ -134,6 +135,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     progressFetchKeyRef.current = null;
+    setHasLoadedProgressList(false);
   }, [user?.id]);
 
   useEffect(() => {
@@ -363,6 +365,7 @@ const App: React.FC = () => {
     let cancelled = false;
     (async () => {
       try {
+        setHasLoadedProgressList(false);
         const progressMap = await fetchCoursesProgress(sortedIds);
         if (cancelled) return;
         setUser((prev) =>
@@ -375,6 +378,8 @@ const App: React.FC = () => {
         );
       } catch (error) {
         console.error('Failed to load user progress', error);
+      } finally {
+        if (!cancelled) setHasLoadedProgressList(true);
       }
     })();
 
@@ -626,6 +631,7 @@ const App: React.FC = () => {
         <ProfilePage
           user={user}
           courses={courses}
+          progressLoaded={hasLoadedProgressList}
           purchasedCourseIds={purchasedCourseIds}
           onLogout={handleLogout}
           onContinueCourse={(id) => {
