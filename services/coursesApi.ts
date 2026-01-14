@@ -1,5 +1,5 @@
 import { apiFetch } from './apiClient';
-import { Course, Lesson, LessonType } from '../types';
+import { Course, CourseModule, Lesson, LessonType } from '../types';
 
 interface BackendCourse {
   id: string;
@@ -21,6 +21,7 @@ interface BackendCourse {
 interface BackendLesson {
   id: string;
   course_id: string;
+  module_id?: string | null;
   slug: string | null;
   title: string | null;
   lesson_type: string | null;
@@ -31,6 +32,13 @@ interface BackendLesson {
   settings?: unknown;
   mode?: string | null;
   settings_mode?: string | null;
+}
+
+interface BackendCourseModule {
+  id: string;
+  course_id: string;
+  sort_order?: number | null;
+  title: string | null;
 }
 
 function mapLessonType(lessonType?: string | null): LessonType {
@@ -96,6 +104,16 @@ function mapCourse(row: BackendCourse): Course {
     isPurchased: Boolean(row.is_purchased),
     isFree: access !== 'pro',
     lessons: [],
+    modules: [],
+  };
+}
+
+function mapCourseModule(row: BackendCourseModule): CourseModule {
+  return {
+    id: row.id,
+    courseId: row.course_id,
+    sortOrder: row.sort_order ?? null,
+    title: row.title ?? 'Без названия',
   };
 }
 
@@ -103,6 +121,7 @@ function mapLesson(row: BackendLesson): Lesson {
   return {
     id: row.id,
     courseId: row.course_id,
+    moduleId: row.module_id ?? null,
     slug: row.slug ?? row.id,
     title: row.title ?? 'Без названия',
     description: extractDescription(row.blocks),
@@ -141,7 +160,7 @@ export async function fetchCourseLessons(courseId: string): Promise<Lesson[]> {
   const promise = (async () => {
     try {
       const lessons = await apiFetch<BackendLesson[]>(
-        `/api/rest/v1/lessons?course_id=eq.${id}`,
+        `/api/rest/v1/lessons?course_id=eq.${id}&order=sort_order.asc`,
       );
       const mapped = lessons.map(mapLesson);
       lessonsCache.set(id, mapped);
@@ -152,5 +171,35 @@ export async function fetchCourseLessons(courseId: string): Promise<Lesson[]> {
   })();
 
   lessonsInFlight.set(id, promise);
+  return promise;
+}
+
+const modulesCache = new Map<string, CourseModule[]>();
+const modulesInFlight = new Map<string, Promise<CourseModule[]>>();
+
+export async function fetchCourseModules(courseId: string): Promise<CourseModule[]> {
+  const id = String(courseId || '').trim();
+  if (!id) return [];
+
+  const cached = modulesCache.get(id);
+  if (cached) return cached;
+
+  const inflight = modulesInFlight.get(id);
+  if (inflight) return inflight;
+
+  const promise = (async () => {
+    try {
+      const modules = await apiFetch<BackendCourseModule[]>(
+        `/api/rest/v1/course_modules?course_id=eq.${id}&order=sort_order.asc`,
+      );
+      const mapped = modules.map(mapCourseModule);
+      modulesCache.set(id, mapped);
+      return mapped;
+    } finally {
+      modulesInFlight.delete(id);
+    }
+  })();
+
+  modulesInFlight.set(id, promise);
   return promise;
 }
