@@ -41,10 +41,6 @@ interface BackendCourseModule {
   title: string | null;
 }
 
-type BackendLessonWithModule = BackendLesson & {
-  course_modules?: BackendCourseModule | null;
-};
-
 type CourseContent = { lessons: Lesson[]; modules: CourseModule[] };
 
 function mapLessonType(lessonType?: string | null): LessonType {
@@ -165,27 +161,21 @@ export async function fetchCourseContent(courseId: string): Promise<CourseConten
 
   const promise = (async () => {
     try {
-      // Preferred path: single request via PostgREST embedding (lessons -> course_modules).
       try {
-        const lessons = await apiFetch<BackendLessonWithModule[]>(
-          `/api/rest/v1/lessons?course_id=eq.${id}&select=id,course_id,module_id,slug,title,lesson_type,lesson_type_ru,sort_order,blocks,unlock_rule,settings,mode,settings_mode,course_modules(id,course_id,sort_order,title)&order=sort_order.asc`,
+        const result = await apiFetch<{ lessons?: BackendLesson[]; modules?: BackendCourseModule[] }>(
+          `/api/courses/${encodeURIComponent(id)}/content`,
         );
+        const lessons = Array.isArray(result?.lessons) ? result.lessons : [];
+        const modules = Array.isArray(result?.modules) ? result.modules : [];
 
-        const modulesById = new Map<string, CourseModule>();
-        lessons.forEach((row) => {
-          const module = row.course_modules;
-          if (module && typeof module.id === 'string') {
-            modulesById.set(module.id, mapCourseModule(module));
-          }
-        });
-
-        const mappedLessons = lessons.map(mapLesson);
-        const mappedModules = [...modulesById.values()].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
-        const content: CourseContent = { lessons: mappedLessons, modules: mappedModules };
+        const content: CourseContent = {
+          lessons: lessons.map(mapLesson),
+          modules: modules.map(mapCourseModule),
+        };
         contentCache.set(id, content);
         return content;
       } catch {
-        // Fallback: 2 requests (keeps app working if embed relationship isn't configured).
+        // Back-compat fallback for older backends.
         const [lessons, modules] = await Promise.all([
           apiFetch<BackendLesson[]>(
             `/api/rest/v1/lessons?course_id=eq.${id}&order=sort_order.asc`,
