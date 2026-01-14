@@ -387,6 +387,11 @@ const App: React.FC = () => {
 
     return () => {
       cancelled = true;
+      // React StrictMode mounts/unmounts effects twice in dev; if we keep the key set after
+      // cleanup, the second mount will early-return and progress will never load.
+      if (progressFetchKeyRef.current === key) {
+        progressFetchKeyRef.current = null;
+      }
     };
   }, [courses, hasFetchedProfile, user?.id]);
 
