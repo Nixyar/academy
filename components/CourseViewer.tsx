@@ -446,6 +446,78 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
 
   const lessonIdsKey = useMemo(() => course.lessons.map((lesson) => lesson.id).join('|'), [course.lessons]);
 
+  const sortedCourseModules = useMemo(() => {
+    const modules = Array.isArray(course.modules) ? course.modules : [];
+    const copy = [...modules];
+    copy.sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+    return copy;
+  }, [course.modules]);
+
+  const moduleById = useMemo(() => {
+    const map = new Map<string, (typeof sortedCourseModules)[number]>();
+    sortedCourseModules.forEach((module) => map.set(module.id, module));
+    return map;
+  }, [sortedCourseModules]);
+
+  const sidebarLessonGroups = useMemo(() => {
+    if (sortedCourseModules.length === 0) return null;
+
+    const grouped = new Map<string, Array<{ lesson: Course['lessons'][number]; idx: number }>>();
+    sortedCourseModules.forEach((module) => grouped.set(module.id, []));
+
+    const ungrouped: Array<{ lesson: Course['lessons'][number]; idx: number }> = [];
+
+    course.lessons.forEach((lesson, idx) => {
+      const moduleId = typeof (lesson as any)?.moduleId === 'string' ? ((lesson as any).moduleId as string) : null;
+      if (moduleId && grouped.has(moduleId)) {
+        grouped.get(moduleId)!.push({ lesson, idx });
+      } else {
+        ungrouped.push({ lesson, idx });
+      }
+    });
+
+    return { grouped, ungrouped };
+  }, [course.lessons, sortedCourseModules]);
+
+  const activeModuleTitle = useMemo(() => {
+    const moduleId = typeof (activeLesson as any)?.moduleId === 'string' ? ((activeLesson as any).moduleId as string) : null;
+    if (!moduleId) return null;
+    return moduleById.get(moduleId)?.title ?? null;
+  }, [activeLesson, moduleById]);
+
+  const renderLessonNavButton = (lesson: Course['lessons'][number], idx: number) => {
+    const canNavigate = unlockedLessonIds.has(lesson.id);
+    return (
+      <button
+        key={lesson.id}
+        onClick={() => (canNavigate ? goToLesson(idx) : undefined)}
+        disabled={!canNavigate}
+        className={`w-full text-left p-4 border-b border-white/5 hover:bg-white/5 transition-all flex items-start gap-3 group
+                    ${activeLessonIndex === idx ? 'bg-white/5 border-l-2 border-l-vibe-500' : 'border-l-2 border-l-transparent'}
+                    ${canNavigate ? '' : 'opacity-50 cursor-not-allowed'}
+                `}
+      >
+        <div
+          className={`mt-0.5 w-6 h-6 rounded flex items-center justify-center text-[10px] font-bold transition-colors
+                    ${activeLessonIndex === idx ? 'bg-vibe-500 text-white shadow-lg shadow-vibe-500/20' : 'bg-slate-800 text-slate-500 group-hover:bg-slate-700'}
+                `}
+        >
+          {idx + 1}
+        </div>
+        <div>
+          <h4
+            className={`text-sm font-medium mb-1 transition-colors ${activeLessonIndex === idx ? 'text-white' : 'text-slate-400 group-hover:text-slate-200'}`}
+          >
+            {lesson.title}
+          </h4>
+          <span className="text-[10px] text-slate-600 uppercase tracking-wider font-bold">
+            {lesson.lessonTypeRu ?? lesson.lessonType ?? lesson.type ?? ''}
+          </span>
+        </div>
+      </button>
+    );
+  };
+
   useEffect(() => {
     let cancelled = false;
 
@@ -1762,7 +1834,14 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
             <ChevronLeft className="w-4 h-4" /> Назад
           </button>
           <div className="h-6 w-px bg-white/10 mx-2 hidden md:block"></div>
-          <h1 className="font-bold text-lg hidden md:block font-display tracking-tight text-slate-200">{course.title}</h1>
+          <div className="hidden md:flex flex-col">
+            <h1 className="font-bold text-lg font-display tracking-tight text-slate-200">{course.title}</h1>
+            {activeModuleTitle ? (
+              <div className="text-[10px] uppercase tracking-widest text-slate-500 font-semibold">
+                Модуль: {activeModuleTitle}
+              </div>
+            ) : null}
+          </div>
         </div>
         <div className="flex items-center gap-4">
           <span className="text-xs text-vibe-400 font-mono px-3 py-1 bg-vibe-500/10 border border-vibe-500/20 rounded-full">
@@ -1784,34 +1863,33 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
                 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
             `}>
           <div className="overflow-y-auto h-full pb-20 custom-scrollbar">
-            {course.lessons.map((lesson, idx) => {
-              const canNavigate = unlockedLessonIds.has(lesson.id);
-              return (
-                <button
-                  key={lesson.id}
-                  onClick={() => (canNavigate ? goToLesson(idx) : undefined)}
-                  disabled={!canNavigate}
-                  className={`w-full text-left p-4 border-b border-white/5 hover:bg-white/5 transition-all flex items-start gap-3 group
-                              ${activeLessonIndex === idx ? 'bg-white/5 border-l-2 border-l-vibe-500' : 'border-l-2 border-l-transparent'}
-                              ${canNavigate ? '' : 'opacity-50 cursor-not-allowed'}
-                          `}
-                >
-                  <div className={`mt-0.5 w-6 h-6 rounded flex items-center justify-center text-[10px] font-bold transition-colors
-                              ${activeLessonIndex === idx ? 'bg-vibe-500 text-white shadow-lg shadow-vibe-500/20' : 'bg-slate-800 text-slate-500 group-hover:bg-slate-700'}
-                          `}>
-                    {idx + 1}
-                  </div>
+            {sidebarLessonGroups ? (
+              <>
+                {sortedCourseModules.map((module) => {
+                  const items = sidebarLessonGroups.grouped.get(module.id) ?? [];
+                  if (items.length === 0) return null;
+                  return (
+                    <div key={module.id}>
+                      <div className="px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-500 bg-[#050914] border-b border-white/5 sticky top-0 z-10">
+                        {module.title}
+                      </div>
+                      {items.map(({ lesson, idx }) => renderLessonNavButton(lesson, idx))}
+                    </div>
+                  );
+                })}
+
+                {sidebarLessonGroups.ungrouped.length > 0 ? (
                   <div>
-                    <h4 className={`text-sm font-medium mb-1 transition-colors ${activeLessonIndex === idx ? 'text-white' : 'text-slate-400 group-hover:text-slate-200'}`}>
-                      {lesson.title}
-                    </h4>
-                    <span className="text-[10px] text-slate-600 uppercase tracking-wider font-bold">
-                      {lesson.lessonTypeRu ?? lesson.lessonType ?? lesson.type ?? ''}
-                    </span>
+                    <div className="px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-500 bg-[#050914] border-b border-white/5 sticky top-0 z-10">
+                      Без модуля
+                    </div>
+                    {sidebarLessonGroups.ungrouped.map(({ lesson, idx }) => renderLessonNavButton(lesson, idx))}
                   </div>
-                </button>
-              );
-            })}
+                ) : null}
+              </>
+            ) : (
+              course.lessons.map((lesson, idx) => renderLessonNavButton(lesson, idx))
+            )}
           </div>
         </aside>
 

@@ -14,6 +14,7 @@ export interface Course {
   isPurchased?: boolean;
   isFree: boolean;
   lessons: Lesson[];
+  modules?: CourseModule[];
 }
 
 export type LessonStatus = 'in_progress' | 'completed';
@@ -39,9 +40,17 @@ export enum LessonType {
   CODE_GENERATION = 'CODE_GENERATION'
 }
 
+export interface CourseModule {
+  id: string;
+  courseId: string;
+  sortOrder?: number | null;
+  title: string;
+}
+
 export interface Lesson {
   id: string;
   courseId: string;
+  moduleId?: string | null;
   slug: string;
   title: string;
   description: string; // Markdown supported
