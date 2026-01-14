@@ -11,7 +11,7 @@ import { Course, CourseProgress, User } from './types';
 import { logout, me, refreshSession, type BackendProfile } from './services/authApi';
 import { clearSupabaseStoredSession, supabase } from './services/supabaseClient';
 import { userFromProfile } from './services/userFromProfile';
-import { fetchCourseLessons, fetchCourseModules, fetchCourses } from './services/coursesApi';
+import { fetchCourseContent, fetchCourses } from './services/coursesApi';
 import { fetchCoursesProgress } from './services/progressApi';
 import { syncTbankCoursePurchase } from './services/paymentsApi';
 import { ApiError } from './services/apiClient';
@@ -279,28 +279,18 @@ const App: React.FC = () => {
           const course = currentCourses.find(c => c.slug === currentRoute.courseSlug || c.id === currentRoute.courseSlug);
           if (course) {
               try {
-              const [progressResult, lessonsResult, modulesResult] = await Promise.allSettled([
+              const [progressResult, contentResult] = await Promise.allSettled([
                 fetchCoursesProgress([course.id]),
-                fetchCourseLessons(course.id),
-                fetchCourseModules(course.id),
+                fetchCourseContent(course.id),
               ]);
 
-              if (lessonsResult.status === 'fulfilled') {
-                const lessons = lessonsResult.value;
+              if (contentResult.status === 'fulfilled') {
+                const { lessons, modules } = contentResult.value;
                 setCourses(prev =>
-                  prev.map(c => c.id === course.id ? { ...c, lessons } : c),
+                  prev.map(c => c.id === course.id ? { ...c, lessons, modules } : c),
                 );
               } else {
-                console.error('Failed to pre-fetch course lessons', lessonsResult.reason);
-              }
-
-              if (modulesResult.status === 'fulfilled') {
-                const modules = modulesResult.value;
-                setCourses(prev =>
-                  prev.map(c => c.id === course.id ? { ...c, modules } : c),
-                );
-              } else {
-                console.error('Failed to pre-fetch course modules', modulesResult.reason);
+                console.error('Failed to pre-fetch course content', contentResult.reason);
               }
 
               if (progressResult.status === 'fulfilled') {
@@ -542,10 +532,7 @@ const App: React.FC = () => {
     if (course.lessons.length === 0) {
       setLessonsLoadingFor(courseId);
       try {
-        const [lessons, modules] = await Promise.all([
-          fetchCourseLessons(courseId),
-          fetchCourseModules(courseId),
-        ]);
+        const { lessons, modules } = await fetchCourseContent(courseId);
         setCourses((prev) =>
           prev.map((c) => (c.id === courseId ? { ...c, lessons, modules } : c)),
         );
@@ -555,16 +542,6 @@ const App: React.FC = () => {
         return;
       }
       setLessonsLoadingFor(null);
-    } else if (!Array.isArray(course.modules) || course.modules.length === 0) {
-      void fetchCourseModules(courseId)
-        .then((modules) => {
-          setCourses((prev) =>
-            prev.map((c) => (c.id === courseId ? { ...c, modules } : c)),
-          );
-        })
-        .catch(() => {
-          // ignore modules load failures; keep flat lessons view
-        });
     }
 
     setSelectedCourseId(courseId);
