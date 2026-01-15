@@ -84,11 +84,14 @@ function extractDescription(blocks: unknown): string {
 
 function mapCourse(row: BackendCourse): Course {
   const access = row.access?.toLowerCase() ?? 'free';
-  const label =
-    (typeof row.label === 'string' && row.label.trim() ? row.label.trim() : null) ??
-    (Array.isArray(row.labels)
-      ? (row.labels.find((value) => typeof value === 'string' && value.trim())?.trim() ?? null)
-      : null);
+  const normalizedLabels = Array.isArray(row.labels)
+    ? row.labels
+        .filter((value): value is string => typeof value === 'string')
+        .map((value) => value.trim())
+        .filter(Boolean)
+    : [];
+  const normalizedLabel = typeof row.label === 'string' && row.label.trim() ? row.label.trim() : null;
+  const label: Course['label'] = normalizedLabels.length > 0 ? normalizedLabels : normalizedLabel;
 
   return {
     id: row.id,
