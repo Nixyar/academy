@@ -114,26 +114,34 @@ function mapCourse(row: BackendCourse): Course {
 }
 
 function mapCourseModule(row: BackendCourseModule): CourseModule {
+  const courseId = (row as any).course_id ?? (row as any).courseId ?? '';
+  const sortOrder = (row as any).sort_order ?? (row as any).sortOrder ?? null;
   return {
     id: row.id,
-    courseId: row.course_id,
-    sortOrder: row.sort_order ?? null,
+    courseId: String(courseId),
+    sortOrder: typeof sortOrder === 'number' ? sortOrder : sortOrder == null ? null : Number(sortOrder),
     title: row.title ?? 'Без названия',
   };
 }
 
 function mapLesson(row: BackendLesson): Lesson {
+  const courseId = (row as any).course_id ?? (row as any).courseId ?? '';
+  const moduleIdRaw = (row as any).module_id ?? (row as any).moduleId ?? null;
+  const altModuleIdRaw = (row as any).course_module_id ?? (row as any).courseModuleId ?? null;
+  const effectiveModuleIdRaw = moduleIdRaw ?? altModuleIdRaw ?? null;
+  const moduleId = effectiveModuleIdRaw == null ? null : String(effectiveModuleIdRaw);
+  const sortOrder = (row as any).sort_order ?? (row as any).sortOrder ?? null;
   return {
     id: row.id,
-    courseId: row.course_id,
-    moduleId: row.module_id ?? null,
+    courseId: String(courseId),
+    moduleId,
     slug: row.slug ?? row.id,
     title: row.title ?? 'Без названия',
     description: extractDescription(row.blocks),
     type: mapLessonType(row.lesson_type),
     lessonType: row.lesson_type ?? null,
     lessonTypeRu: row.lesson_type_ru ?? null,
-    sortOrder: row.sort_order ?? null,
+    sortOrder: typeof sortOrder === 'number' ? sortOrder : sortOrder == null ? null : Number(sortOrder),
     blocks: row.blocks,
     unlock_rule: row.unlock_rule,
     videoUrl: null,
