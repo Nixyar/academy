@@ -82,8 +82,14 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, courses, progres
       {/* Navbar Placeholder */}
       <nav className="h-20 border-b border-white/5 bg-void/80 backdrop-blur-md flex items-center justify-between px-6 sticky top-0 z-30">
          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-vibe-glow to-purple-glow flex items-center justify-center text-void font-bold shadow-[0_0_10px_rgba(0,243,255,0.3)]">
-                <Zap size={20} className="fill-current" />
+            <div className="w-10 h-10 flex items-center justify-center">
+                <img
+                  src="/logo.png"
+                  alt="VibeCoderAI"
+                  className="w-10 h-10 object-contain drop-shadow-[0_0_12px_rgba(0,243,255,0.28)]"
+                  loading="eager"
+                  decoding="async"
+                />
             </div>
             <span className="text-xl font-bold tracking-tight font-display">Vibe<span className="text-vibe-400">Profile</span></span>
          </div>
