@@ -1,0 +1,44 @@
+{
+  "site": {
+    "name": "VibeCoderAI",
+    "baseUrl": "https://vibecoderai.ru",
+    "language": "ru",
+    "locale": "ru_RU"
+  },
+  "routes": [
+    {
+      "path": "/",
+      "title": "VibeCoderAI — академия вайб-кодинга и промптинга",
+      "description": "VibeCoderAI — обучение Vibe Coding и prompt engineering: создавай лендинги и веб-приложения через AI быстрее и увереннее.",
+      "type": "home"
+    },
+    {
+      "path": "/courses",
+      "title": "Курсы | VibeCoderAI",
+      "description": "Каталог курсов VibeCoderAI: бесплатные и PRO-программы по вайб-кодингу и промптингу.",
+      "type": "courses_index"
+    },
+    {
+      "path": "/courses/vibe-basics",
+      "title": "Основы Vibe Coding — бесплатный курс | VibeCoderAI",
+      "description": "Быстрый старт: как собирать лендинги и веб-приложения с AI, без фреймворк-боли и рутины.",
+      "type": "course",
+      "course": { "name": "Основы Vibe Coding", "url": "/courses/vibe-basics" }
+    },
+    {
+      "path": "/courses/prompt-developer",
+      "title": "Prompt-Developer — курс по prompt engineering | VibeCoderAI",
+      "description": "Промпт-инжиниринг под прод: структура, итерации и проверка — чтобы идеи превращались в рабочие продукты.",
+      "type": "course",
+      "course": { "name": "Prompt-Developer", "url": "/courses/prompt-developer" }
+    },
+    {
+      "path": "/profile",
+      "title": "Профиль | VibeCoderAI",
+      "description": "Личный кабинет VibeCoderAI.",
+      "type": "private",
+      "noindex": true,
+      "prerender": false
+    }
+  ]
+}

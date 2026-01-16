@@ -232,6 +232,54 @@ export const LandingPage: React.FC<LandingPageProps> = ({
             className="text-transparent bg-clip-text bg-gradient-to-r from-vibe-400 to-purple-400">Погружения</span>
           </h2>
 
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-10">
+            <a
+              href="/courses/vibe-basics"
+              className="group relative rounded-3xl overflow-hidden bg-glass border border-white/5 hover:border-white/20 transition-all duration-300"
+            >
+              <div className="absolute inset-0 z-0 bg-gradient-to-br from-vibe-500/10 via-transparent to-purple-500/10 opacity-60 group-hover:opacity-100 transition-opacity"></div>
+              <div className="relative z-10 p-8">
+                <div className="flex justify-end mb-6">
+                  <span className="px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wide border backdrop-blur-md bg-green-500/10 border-green-500/20 text-green-400">
+                    Бесплатно
+                  </span>
+                </div>
+                <h3 className="text-3xl font-bold mb-4 font-display group-hover:text-vibe-400 transition-colors">
+                  Основы Vibe Coding
+                </h3>
+                <p className="text-slate-400 leading-relaxed">
+                  Быстрый старт: как собирать лендинги и веб‑приложения с AI, без фреймворк‑боли и рутины.
+                </p>
+                <div className="mt-8 text-white font-bold font-display underline decoration-white/30 group-hover:decoration-vibe-400 transition-colors">
+                  Открыть курс
+                </div>
+              </div>
+            </a>
+
+            <a
+              href="/courses/prompt-developer"
+              className="group relative rounded-3xl overflow-hidden bg-glass border border-white/5 hover:border-white/20 transition-all duration-300"
+            >
+              <div className="absolute inset-0 z-0 bg-gradient-to-br from-purple-500/10 via-transparent to-pink-500/10 opacity-60 group-hover:opacity-100 transition-opacity"></div>
+              <div className="relative z-10 p-8">
+                <div className="flex justify-end mb-6">
+                  <span className="px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wide border backdrop-blur-md bg-purple-500/10 border-purple-500/20 text-purple-400">
+                    PRO
+                  </span>
+                </div>
+                <h3 className="text-3xl font-bold mb-4 font-display group-hover:text-vibe-400 transition-colors">
+                  Prompt‑Developer
+                </h3>
+                <p className="text-slate-400 leading-relaxed">
+                  Промпт‑инжиниринг под прод: структура, итерации и проверка — чтобы идеи превращались в рабочие продукты.
+                </p>
+                <div className="mt-8 text-white font-bold font-display underline decoration-white/30 group-hover:decoration-vibe-400 transition-colors">
+                  Открыть курс
+                </div>
+              </div>
+            </a>
+          </div>
+
           <CoursesSlider
             courses={courses}
             user={user}

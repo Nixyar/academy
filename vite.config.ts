@@ -3,6 +3,7 @@ import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
+import { getPrerenderRoutes } from './src/seo/useRouteSeo';
 
 const require = createRequire(import.meta.url);
 type VitePrerenderPlugin = (options: unknown) => unknown;
@@ -56,9 +57,13 @@ export default defineConfig(({ mode }) => {
         react(),
         vitePrerender({
           staticDir: path.join(__dirname, 'dist'),
-          routes: ['/', '/courses', '/profile', '/courses/vibe-basics', '/courses/prompt-developer'],
+          routes: getPrerenderRoutes(),
+          server: {
+            port: 4179,
+          },
           renderer: new SafePuppeteerRenderer({
             executablePath: resolveChromeExecutablePath(),
+            renderAfterDocumentEvent: 'prerender-ready',
             ...(process.platform === 'linux'
               ? { args: ['--no-sandbox', '--disable-setuid-sandbox'] }
               : null),

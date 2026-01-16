@@ -15,6 +15,7 @@ import { fetchCourseContent, fetchCourses } from './services/coursesApi';
 import { fetchCoursesProgress } from './services/progressApi';
 import { syncTbankCoursePurchase } from './services/paymentsApi';
 import { ApiError } from './services/apiClient';
+import { getRouteSeo } from './src/seo/useRouteSeo';
 
 type View = 'landing' | 'course' | 'profile';
 
@@ -54,6 +55,63 @@ const routeToPath = (route: RouteState): string => {
     return `/courses/${encodeURIComponent(route.courseSlug)}`;
   }
   return route.landingPath ?? '/';
+};
+
+const ensureMetaTag = (name: string): HTMLMetaElement => {
+  let element = document.head.querySelector(`meta[name="${name}"]`) as HTMLMetaElement | null;
+  if (!element) {
+    element = document.createElement('meta');
+    element.setAttribute('name', name);
+    document.head.appendChild(element);
+  }
+  return element;
+};
+
+const ensureMetaProperty = (property: string): HTMLMetaElement => {
+  let element = document.head.querySelector(`meta[property="${property}"]`) as HTMLMetaElement | null;
+  if (!element) {
+    element = document.createElement('meta');
+    element.setAttribute('property', property);
+    document.head.appendChild(element);
+  }
+  return element;
+};
+
+const removeMetaTag = (name: string) => {
+  document.head.querySelector(`meta[name="${name}"]`)?.remove();
+};
+
+const removeMetaProperty = (property: string) => {
+  document.head.querySelector(`meta[property="${property}"]`)?.remove();
+};
+
+const ensureLinkTag = (rel: string): HTMLLinkElement => {
+  let element = document.head.querySelector(`link[rel="${rel}"]`) as HTMLLinkElement | null;
+  if (!element) {
+    element = document.createElement('link');
+    element.setAttribute('rel', rel);
+    document.head.appendChild(element);
+  }
+  return element;
+};
+
+const removeLinkTag = (rel: string) => {
+  document.head.querySelector(`link[rel="${rel}"]`)?.remove();
+};
+
+const removeJsonLdScripts = () => {
+  document.head.querySelectorAll('script[data-seo-jsonld="1"]').forEach((el) => el.remove());
+};
+
+  const addJsonLdScripts = (objects: unknown[]) => {
+  removeJsonLdScripts();
+  objects.forEach((obj) => {
+    const script = document.createElement('script');
+    script.type = 'application/ld+json';
+    script.setAttribute('data-seo-jsonld', '1');
+    script.text = JSON.stringify(obj);
+    document.head.appendChild(script);
+  });
 };
 
 const OrbitLoader: React.FC<{ label?: string }> = ({ label }) => (
@@ -433,6 +491,47 @@ const App: React.FC = () => {
       window.history.replaceState({}, '', targetPath);
     }
   }, [route, isAuthCallbackPath]);
+
+  useEffect(() => {
+    if (isAuthCallbackPath) return;
+    const pathname = routeToPath(route);
+    const meta = getRouteSeo(pathname);
+    document.title = meta.title;
+    if (meta.description) ensureMetaTag('description').setAttribute('content', meta.description);
+    else removeMetaTag('description');
+
+    if (meta.canonicalUrl) {
+      ensureLinkTag('canonical').setAttribute('href', meta.canonicalUrl);
+    } else {
+      removeLinkTag('canonical');
+    }
+
+    ensureMetaProperty('og:title').setAttribute('content', meta.openGraph.title);
+    if (meta.openGraph.description) ensureMetaProperty('og:description').setAttribute('content', meta.openGraph.description);
+    else removeMetaProperty('og:description');
+    ensureMetaProperty('og:url').setAttribute('content', meta.openGraph.url);
+    ensureMetaProperty('og:site_name').setAttribute('content', meta.openGraph.siteName);
+    ensureMetaProperty('og:type').setAttribute('content', meta.openGraph.type);
+    ensureMetaProperty('og:locale').setAttribute('content', meta.openGraph.locale);
+    if (meta.openGraph.image) ensureMetaProperty('og:image').setAttribute('content', meta.openGraph.image);
+    else removeMetaProperty('og:image');
+
+    ensureMetaTag('twitter:card').setAttribute('content', meta.twitter.card);
+    ensureMetaTag('twitter:title').setAttribute('content', meta.twitter.title);
+    if (meta.twitter.description) ensureMetaTag('twitter:description').setAttribute('content', meta.twitter.description);
+    else removeMetaTag('twitter:description');
+    if (meta.twitter.image) ensureMetaTag('twitter:image').setAttribute('content', meta.twitter.image);
+    else removeMetaTag('twitter:image');
+
+    if (meta.noindex) {
+      ensureMetaTag('robots').setAttribute('content', 'noindex,nofollow');
+    } else {
+      removeMetaTag('robots');
+    }
+
+    addJsonLdScripts(meta.jsonLd);
+    document.dispatchEvent(new Event('prerender-ready'));
+  }, [route.view, route.courseSlug, route.landingPath, isAuthCallbackPath]);
 
   const handleAuthenticated = (authedUser: User) => {
     setUser(authedUser);
