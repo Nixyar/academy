@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+Disallow: /profile
+
+Sitemap: https://vibecoderai.ru/sitemap.xml
+
