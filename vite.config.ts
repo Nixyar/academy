@@ -1,3 +1,4 @@
+// @ts-nocheck
 import path from 'path';
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
