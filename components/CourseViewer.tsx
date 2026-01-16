@@ -243,6 +243,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
   const [isSendingPrompt, setIsSendingPrompt] = useState(false);
   const [courseQuota, setCourseQuota] = useState<CourseQuota | null>(null);
   const [courseQuotaLoading, setCourseQuotaLoading] = useState(false);
+  const [courseQuotaError, setCourseQuotaError] = useState<string | null>(null);
   const [llmHtml, setLlmHtml] = useState<string | null>(null);
   const [llmError, setLlmError] = useState<string | null>(null);
   const [llmOutline, setLlmOutline] = useState<unknown>(null);
@@ -582,19 +583,32 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     let cancelled = false;
 
     void (async () => {
-      if (!quotaRequired) {
+      const llmLimit = (course as any)?.llmLimit;
+      const required =
+        String(activeLesson.lessonType ?? '').toLowerCase() === 'workshop' &&
+        typeof llmLimit === 'number' &&
+        Number.isFinite(llmLimit) &&
+        llmLimit > 0;
+
+      if (!required) {
         setCourseQuota(null);
         setCourseQuotaLoading(false);
+        setCourseQuotaError(null);
         return;
       }
 
       try {
         setCourseQuotaLoading(true);
+        setCourseQuotaError(null);
         const quota = await fetchCourseQuota(course.id);
         if (!cancelled) setCourseQuota(quota);
       } catch (error) {
         console.warn('Failed to load course quota', error);
         if (!cancelled) setCourseQuota(null);
+        if (!cancelled) {
+          const message = describeApiError(error, 'Не удалось проверить лимит запросов.');
+          setCourseQuotaError(message);
+        }
       } finally {
         if (!cancelled) setCourseQuotaLoading(false);
       }
@@ -603,7 +617,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [course.id, quotaRequired]);
+  }, [activeLesson.lessonType, course.id, (course as any)?.llmLimit]);
 
   const isWorkshopLesson = useMemo(
     () => (activeLesson.lessonType ?? '').toLowerCase() === 'workshop',
@@ -612,7 +626,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
   const quotaRequired = useMemo(() => {
     const limit = (course as any)?.llmLimit;
     return isWorkshopLesson && typeof limit === 'number' && Number.isFinite(limit) && limit > 0;
-  }, [course, isWorkshopLesson]);
+  }, [(course as any)?.llmLimit, isWorkshopLesson]);
   const isLectureLesson = useMemo(
     () => (activeLesson.lessonType ?? '').toLowerCase() === 'lecture',
     [activeLesson.lessonType],
@@ -1619,7 +1633,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     const prompt = promptInput.trim();
     if (!prompt || isSendingPrompt) return;
     if (quotaRequired && (courseQuotaLoading || !courseQuota)) {
-      setLlmError('Не удалось проверить лимит запросов. Перезагрузите страницу и попробуйте ещё раз.');
+      setLlmError(courseQuotaError || 'Не удалось проверить лимит запросов. Перезагрузите страницу и попробуйте ещё раз.');
       return;
     }
     if (courseQuota?.limit != null && courseQuota.remaining === 0) {
@@ -1697,6 +1711,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     course.id,
     courseQuota?.limit,
     courseQuota?.remaining,
+    courseQuotaError,
     courseQuotaLoading,
     isSendingPrompt,
     promptInput,
@@ -1878,9 +1893,13 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
                   <div className="absolute bottom-3 right-3 flex items-center gap-3">
                     {quotaRequired && (
                       <span className="text-[11px] text-slate-400/80 font-mono">
-                        {courseQuotaLoading || !courseQuota
+                        {courseQuotaLoading
                           ? 'Проверяем лимит...'
-                          : `Осталось запросов: ${courseQuota.remaining ?? 0}`}
+                          : courseQuotaError
+                            ? 'Лимит недоступен'
+                            : !courseQuota
+                              ? 'Проверяем лимит...'
+                              : `Осталось запросов: ${courseQuota.remaining ?? 0}`}
                       </span>
                     )}
                     <button
