@@ -1,6 +1,6 @@
 import React from 'react';
 import { Course, User } from '../types';
-import { Code, Zap, Rocket, Sparkles, Terminal } from 'lucide-react';
+import { Code, Rocket, Sparkles, Terminal } from 'lucide-react';
 import { CoursesSlider } from './CoursesSlider';
 
 interface LandingPageProps {
@@ -20,6 +20,26 @@ export const LandingPage: React.FC<LandingPageProps> = ({
   onOpenAuth,
   onGoToProfile,
 }) => {
+  const seoFallbackCourses = [
+    {
+      href: '/courses/vibe-basics',
+      title: 'Основы Vibe Coding',
+      description: 'Быстрый старт: как собирать лендинги и веб‑приложения с AI, без фреймворк‑боли и рутины.',
+      coverUrl: '/logo.png',
+      label: 'Бесплатно',
+      access: 'free',
+    },
+    {
+      href: '/courses/prompt-developer',
+      title: 'Prompt-Developer',
+      description:
+        'Промпт‑инжиниринг под прод: структура, итерации и проверка — чтобы идеи превращались в рабочие продукты.',
+      coverUrl: '/logo.png',
+      label: 'PRO',
+      access: 'paid',
+    },
+  ] as const;
+
   const handleHeroAction = () => {
     if (user) {
       onGoToProfile();
@@ -48,8 +68,14 @@ export const LandingPage: React.FC<LandingPageProps> = ({
           <div className="flex items-center justify-between h-20">
             <div className="flex items-center gap-2 group cursor-pointer">
               <div
-                className="w-9 h-9 rounded-xl bg-gradient-to-br from-vibe-glow to-purple-glow flex items-center justify-center text-void font-bold shadow-[0_0_15px_rgba(0,243,255,0.4)]">
-                <Zap size={22} className="fill-current" />
+                className="w-12 h-12 flex items-center justify-center">
+                <img
+                  src="/logo.png"
+                  alt="VibeCoderAI"
+                  className="w-12 h-12 object-contain drop-shadow-[0_0_12px_rgba(0,243,255,0.28)]"
+                  loading="eager"
+                  decoding="async"
+                />
               </div>
               <span className="text-2xl font-bold tracking-tight font-display">
                 VibeCoder<span className="text-vibe-400">Ai</span>
@@ -232,60 +258,63 @@ export const LandingPage: React.FC<LandingPageProps> = ({
             className="text-transparent bg-clip-text bg-gradient-to-r from-vibe-400 to-purple-400">Погружения</span>
           </h2>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-10">
-            <a
-              href="/courses/vibe-basics"
-              className="group relative rounded-3xl overflow-hidden bg-glass border border-white/5 hover:border-white/20 transition-all duration-300"
-            >
-              <div className="absolute inset-0 z-0 bg-gradient-to-br from-vibe-500/10 via-transparent to-purple-500/10 opacity-60 group-hover:opacity-100 transition-opacity"></div>
-              <div className="relative z-10 p-8">
-                <div className="flex justify-end mb-6">
-                  <span className="px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wide border backdrop-blur-md bg-green-500/10 border-green-500/20 text-green-400">
-                    Бесплатно
-                  </span>
-                </div>
-                <h3 className="text-3xl font-bold mb-4 font-display group-hover:text-vibe-400 transition-colors">
-                  Основы Vibe Coding
-                </h3>
-                <p className="text-slate-400 leading-relaxed">
-                  Быстрый старт: как собирать лендинги и веб‑приложения с AI, без фреймворк‑боли и рутины.
-                </p>
-                <div className="mt-8 text-white font-bold font-display underline decoration-white/30 group-hover:decoration-vibe-400 transition-colors">
-                  Открыть курс
-                </div>
-              </div>
-            </a>
+          {courses.length === 0 ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+              {seoFallbackCourses.map((course) => {
+                const badgeLabel = course.label.trim();
+                const isFreeAccess = course.access.toLowerCase() === 'free';
 
-            <a
-              href="/courses/prompt-developer"
-              className="group relative rounded-3xl overflow-hidden bg-glass border border-white/5 hover:border-white/20 transition-all duration-300"
-            >
-              <div className="absolute inset-0 z-0 bg-gradient-to-br from-purple-500/10 via-transparent to-pink-500/10 opacity-60 group-hover:opacity-100 transition-opacity"></div>
-              <div className="relative z-10 p-8">
-                <div className="flex justify-end mb-6">
-                  <span className="px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wide border backdrop-blur-md bg-purple-500/10 border-purple-500/20 text-purple-400">
-                    PRO
-                  </span>
-                </div>
-                <h3 className="text-3xl font-bold mb-4 font-display group-hover:text-vibe-400 transition-colors">
-                  Prompt‑Developer
-                </h3>
-                <p className="text-slate-400 leading-relaxed">
-                  Промпт‑инжиниринг под прод: структура, итерации и проверка — чтобы идеи превращались в рабочие продукты.
-                </p>
-                <div className="mt-8 text-white font-bold font-display underline decoration-white/30 group-hover:decoration-vibe-400 transition-colors">
-                  Открыть курс
-                </div>
-              </div>
-            </a>
-          </div>
+                return (
+                  <a
+                    key={course.href}
+                    href={course.href}
+                    className="group relative rounded-3xl overflow-hidden bg-glass border border-white/5 hover:border-white/20 transition-all duration-300 h-full"
+                  >
+                    <div className="absolute inset-0 z-0">
+                      <img
+                        src={course.coverUrl}
+                        alt=""
+                        className="w-full h-full object-cover opacity-30 group-hover:scale-105 transition-transform duration-700"
+                      />
+                      <div className="absolute inset-0 bg-gradient-to-t from-void via-void/90 to-void/40"></div>
+                    </div>
 
-          <CoursesSlider
-            courses={courses}
-            user={user}
-            onSelectCourse={onSelectCourse}
-            onSubscribe={onSubscribe}
-          />
+                    <div className="relative z-10 p-8 h-full flex flex-col">
+                      <div className="flex justify-end items-start mb-6">
+                        {badgeLabel ? (
+                          isFreeAccess ? (
+                            <span className="px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wide border backdrop-blur-md bg-green-500/10 border-green-500/20 text-green-400">
+                              {badgeLabel}
+                            </span>
+                          ) : (
+                            <span className="px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wide border backdrop-blur-md bg-purple-500/10 border-purple-500/20 text-purple-400">
+                              {badgeLabel}
+                            </span>
+                          )
+                        ) : null}
+                      </div>
+
+                      <h3 className="text-3xl font-bold mb-4 font-display group-hover:text-vibe-400 transition-colors">
+                        {course.title}
+                      </h3>
+                      <p className="text-slate-400 mb-8 flex-1 leading-relaxed">{course.description}</p>
+
+                      <div className="w-full py-4 rounded-xl font-bold transition-all flex items-center justify-center gap-2 font-display bg-white text-void hover:bg-slate-200">
+                        Начать Погружение
+                      </div>
+                    </div>
+                  </a>
+                );
+              })}
+            </div>
+          ) : (
+            <CoursesSlider
+              courses={courses}
+              user={user}
+              onSelectCourse={onSelectCourse}
+              onSubscribe={onSubscribe}
+            />
+          )}
         </div>
       </section>
 

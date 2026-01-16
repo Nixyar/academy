@@ -5,6 +5,7 @@ import { ImageEditor } from './ImageEditor';
 import { FileText, Menu, X, ChevronLeft, ChevronRight, ChevronDown, Send, Info } from 'lucide-react';
 import { fetchCourseProgress, fetchCourseResume, patchCourseProgress } from '../services/progressApi';
 import { ApiError, apiFetch } from '../services/apiClient';
+import { fetchCourseQuota, type CourseQuota } from '../services/courseQuotaApi';
 
 const IFRAME_BASE_STYLES = `
   :root { color-scheme: dark; }
@@ -240,6 +241,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
   const [progressLoading, setProgressLoading] = useState(false);
   const [promptInput, setPromptInput] = useState('');
   const [isSendingPrompt, setIsSendingPrompt] = useState(false);
+  const [courseQuota, setCourseQuota] = useState<CourseQuota | null>(null);
   const [llmHtml, setLlmHtml] = useState<string | null>(null);
   const [llmError, setLlmError] = useState<string | null>(null);
   const [llmOutline, setLlmOutline] = useState<unknown>(null);
@@ -574,6 +576,24 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
       cancelled = true;
     };
   }, [course.id, lessonIdsKey, syncProgress]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void (async () => {
+      try {
+        const quota = await fetchCourseQuota(course.id);
+        if (!cancelled) setCourseQuota(quota);
+      } catch (error) {
+        console.warn('Failed to load course quota', error);
+        if (!cancelled) setCourseQuota(null);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [course.id]);
 
   const isWorkshopLesson = useMemo(
     () => (activeLesson.lessonType ?? '').toLowerCase() === 'workshop',
@@ -1584,6 +1604,10 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
   const handlePromptSubmit = useCallback(async () => {
     const prompt = promptInput.trim();
     if (!prompt || isSendingPrompt) return;
+    if (courseQuota?.limit != null && courseQuota.remaining === 0) {
+      setLlmError('Лимит запросов для этого курса исчерпан.');
+      return;
+    }
 
     cleanupStream();
     setIsSendingPrompt(true);
@@ -1606,7 +1630,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
         prompt,
       });
 
-      const response = await apiFetch<{ jobId?: string; outline?: unknown }>(
+      const response = await apiFetch<{ jobId?: string; outline?: unknown; quota?: CourseQuota }>(
         '/api/v1/html/start',
         {
           method: 'POST',
@@ -1623,6 +1647,9 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
       }
 
       setLlmOutline(response.outline ?? null);
+      if (response.quota && typeof response.quota === 'object') {
+        setCourseQuota(response.quota);
+      }
       try {
         const refreshedProgress = await fetchCourseProgress(course.id);
         syncProgress(refreshedProgress ?? {});
@@ -1650,6 +1677,8 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     applyProgressPatch,
     cleanupStream,
     course.id,
+    courseQuota?.limit,
+    courseQuota?.remaining,
     isSendingPrompt,
     promptInput,
     startHtmlStream,
@@ -1825,11 +1854,16 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
                     }`}
                   placeholder={isLectureLesson ? '' : 'Console ready...'}
                 />
+                {isWorkshopLesson && courseQuota?.limit != null && (
+                  <div className="absolute top-3 right-3 text-[10px] text-slate-300/80 font-mono px-2 py-1 bg-white/5 border border-white/10 rounded">
+                    Осталось: {courseQuota.remaining ?? 0}
+                  </div>
+                )}
                 {isWorkshopLesson && promptInput.trim().length > 0 && (
                   <button
                     type="button"
                     onClick={handlePromptSubmit}
-                    disabled={isSendingPrompt}
+                    disabled={isSendingPrompt || (courseQuota?.limit != null && courseQuota.remaining === 0)}
                     className="absolute bottom-3 right-3 px-3 py-1.5 rounded-lg bg-vibe-600 text-white text-xs font-semibold flex items-center gap-2 shadow-lg shadow-vibe-900/30 hover:bg-vibe-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                     style={{ cursor: 'pointer' }}
                   >
