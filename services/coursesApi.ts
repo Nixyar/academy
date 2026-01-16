@@ -15,6 +15,7 @@ interface BackendCourse {
   price?: number | null;
   sale_price?: number | null;
   currency?: string | null;
+  llm_limit?: number | null;
   is_purchased?: boolean | null;
 }
 
@@ -106,6 +107,7 @@ function mapCourse(row: BackendCourse): Course {
     price: row.price ?? null,
     salePrice: row.sale_price ?? null,
     currency: row.currency ?? null,
+    llmLimit: typeof row.llm_limit === 'number' ? row.llm_limit : row.llm_limit == null ? null : Number(row.llm_limit),
     isPurchased: Boolean(row.is_purchased),
     isFree: access !== 'pro',
     lessons: [],
