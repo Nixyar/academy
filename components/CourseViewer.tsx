@@ -6,6 +6,7 @@ import { FileText, Menu, X, ChevronLeft, ChevronRight, ChevronDown, Send, Info }
 import { fetchCourseProgress, fetchCourseResume, patchCourseProgress } from '../services/progressApi';
 import { ApiError, apiFetch } from '../services/apiClient';
 import { fetchCourseQuota, type CourseQuota } from '../services/courseQuotaApi';
+import { fetchLessonContent } from '../services/lessonsApi';
 
 const IFRAME_BASE_STYLES = `
   :root { color-scheme: dark; }
@@ -232,7 +233,19 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     return 0;
   });
   const activeLesson = course.lessons[activeLessonIndex];
-  const activeLessonMode = useMemo(() => getLessonMode(activeLesson), [activeLesson]);
+  const [activeLessonContent, setActiveLessonContent] = useState<{
+    blocks: unknown;
+    settings: unknown;
+    unlock_rule: unknown;
+  } | null>(null);
+  const [activeLessonContentLoading, setActiveLessonContentLoading] = useState(false);
+  const [activeLessonContentError, setActiveLessonContentError] = useState<string | null>(null);
+
+  const activeLessonResolved = useMemo(
+    () => ({ ...activeLesson, ...(activeLessonContent ?? {}) }),
+    [activeLesson, activeLessonContent],
+  );
+  const activeLessonMode = useMemo(() => getLessonMode(activeLessonResolved), [activeLessonResolved]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [quizAnswer, setQuizAnswer] = useState<number | null>(null);
   const [copiedExample, setCopiedExample] = useState<number | null>(null);
@@ -258,6 +271,35 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
   const streamControllerRef = useRef<AbortController | null>(null);
   const streamingJobIdRef = useRef<string | null>(null);
   const streamLastEventAtRef = useRef<number>(0);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    setActiveLessonContentLoading(true);
+    setActiveLessonContentError(null);
+    setActiveLessonContent(null);
+
+    fetchLessonContent(activeLesson.id)
+      .then((data) => {
+        if (cancelled) return;
+        setActiveLessonContent(data);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setActiveLessonContent(null);
+        setActiveLessonContentError(
+          describeApiError(err, 'Не удалось загрузить контент урока. Попробуйте обновить страницу.'),
+        );
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setActiveLessonContentLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeLesson.id]);
   const lastLessonIdRef = useRef<string>(course.lessons[activeLessonIndex]?.id ?? '');
   const fetchedResultJobIdRef = useRef<string | null>(null);
   const previewIframeRef = useRef<HTMLIFrameElement | null>(null);
@@ -689,7 +731,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
   );
 
   const visibleBlocks = useMemo(() => {
-    const { blocks } = activeLesson;
+    const { blocks } = activeLessonResolved as any;
     if (!blocks) return [];
     const list = Array.isArray(blocks) ? blocks : [blocks];
     const result: unknown[] = [];
@@ -708,7 +750,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     }
 
     return result;
-  }, [activeLesson, evaluateGate]);
+  }, [activeLessonResolved, evaluateGate]);
 
   const heroSubtitle = useMemo(() => {
     const hero = visibleBlocks.find(
@@ -738,7 +780,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
   }, [activeLessonProgress]);
   const isCtaUnlocked = useMemo(() => {
     if ((activeLessonProgress as any)?.status === 'completed') return true;
-    const unlockRuleRaw = (activeLesson as any)?.unlock_rule;
+    const unlockRuleRaw = (activeLessonResolved as any)?.unlock_rule;
     let unlockRule: any = unlockRuleRaw;
     if (typeof unlockRuleRaw === 'string') {
       try {
@@ -753,7 +795,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     // Evaluate against the full gate context, not just lesson progress, so rules that
     // reference course-level fields (e.g. active_job.*) work.
     return evaluateUnlockRule(resolvedRule, gateContext);
-  }, [activeLesson, activeLessonProgress, evaluateUnlockRule, gateContext, resolveUnlockPlaceholders]);
+  }, [activeLessonResolved, activeLessonProgress, evaluateUnlockRule, gateContext, resolveUnlockPlaceholders]);
 
   const ctaData = useMemo(() => extractCtaData(visibleBlocks), [visibleBlocks]);
   const isFinishCta = useMemo(() => (ctaData.action ?? '').toLowerCase() === 'finish', [ctaData.action]);
@@ -1790,10 +1832,15 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
 
   const blockItems = useMemo<LessonBlockItem[]>(() => {
     if (!visibleBlocks.length) {
+      const fallbackText = activeLessonContentLoading
+        ? 'Загрузка контента урока...'
+        : activeLessonContentError
+          ? activeLessonContentError
+          : (typeof activeLesson.description === 'string' ? activeLesson.description : '');
       return [
         {
           key: 'fallback-description',
-          content: typeof activeLesson.description === 'string' ? activeLesson.description : '',
+          content: fallbackText,
           prompt: '',
           blockType: null,
         },
@@ -1819,7 +1866,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
         return { key, content, prompt, blockType };
       })
       .filter(Boolean) as LessonBlockItem[];
-  }, [activeLesson.description, visibleBlocks]);
+  }, [activeLesson.description, activeLessonContentError, activeLessonContentLoading, visibleBlocks]);
 
   // Render the Right Side Content based on Lesson Type
   const renderRightPanel = () => {
