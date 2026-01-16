@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Course, CourseProgress, LessonType } from '../types';
 import { ImageAnalyzer } from './ImageAnalyzer';
 import { ImageEditor } from './ImageEditor';
-import { FileText, Menu, X, ChevronLeft, ChevronRight, Send, Info } from 'lucide-react';
+import { FileText, Menu, X, ChevronLeft, ChevronRight, ChevronDown, Send, Info } from 'lucide-react';
 import { fetchCourseProgress, fetchCourseResume, patchCourseProgress } from '../services/progressApi';
 import { ApiError, apiFetch } from '../services/apiClient';
 
@@ -478,6 +478,28 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
 
     return { grouped, ungrouped };
   }, [course.lessons, sortedCourseModules]);
+
+  const [collapsedSidebarGroups, setCollapsedSidebarGroups] = useState<Set<string>>(() => new Set());
+
+  const toggleSidebarGroup = useCallback((groupId: string) => {
+    setCollapsedSidebarGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupId)) next.delete(groupId);
+      else next.add(groupId);
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    const moduleId = typeof (activeLesson as any)?.moduleId === 'string' ? ((activeLesson as any).moduleId as string) : null;
+    const groupId = moduleId ? `module:${moduleId}` : 'ungrouped';
+    setCollapsedSidebarGroups((prev) => {
+      if (!prev.has(groupId)) return prev;
+      const next = new Set(prev);
+      next.delete(groupId);
+      return next;
+    });
+  }, [activeLesson]);
 
   const activeModuleTitle = useMemo(() => {
     const moduleId = typeof (activeLesson as any)?.moduleId === 'string' ? ((activeLesson as any).moduleId as string) : null;
@@ -1868,22 +1890,64 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
                 {sortedCourseModules.map((module) => {
                   const items = sidebarLessonGroups.grouped.get(module.id) ?? [];
                   if (items.length === 0) return null;
+                  const groupId = `module:${module.id}`;
+                  const collapsed = collapsedSidebarGroups.has(groupId);
                   return (
                     <div key={module.id}>
-                      <div className="px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-500 bg-[#050914] border-b border-white/5 sticky top-0 z-10">
-                        {module.title}
-                      </div>
-                      {items.map(({ lesson, idx }) => renderLessonNavButton(lesson, idx))}
+                      <button
+                        type="button"
+                        onClick={() => toggleSidebarGroup(groupId)}
+                        className="w-full px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-500 bg-[#050914] border-b border-white/5 sticky top-0 z-10 flex items-center justify-between hover:text-slate-300 transition-colors"
+                        aria-expanded={!collapsed}
+                        aria-controls={`sidebar-group-${module.id}`}
+                      >
+                        <span className="truncate">{module.title}</span>
+                        <span className="flex items-center gap-2">
+                          <span className="text-[10px] text-slate-600 font-mono">{items.length}</span>
+                          {collapsed ? <ChevronRight className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                        </span>
+                      </button>
+                      {!collapsed ? (
+                        <div id={`sidebar-group-${module.id}`}>
+                          {items.map(({ lesson, idx }) => renderLessonNavButton(lesson, idx))}
+                        </div>
+                      ) : null}
                     </div>
                   );
                 })}
 
                 {sidebarLessonGroups.ungrouped.length > 0 ? (
                   <div>
-                    <div className="px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-500 bg-[#050914] border-b border-white/5 sticky top-0 z-10">
-                      Без модуля
-                    </div>
-                    {sidebarLessonGroups.ungrouped.map(({ lesson, idx }) => renderLessonNavButton(lesson, idx))}
+                    {(() => {
+                      const groupId = 'ungrouped';
+                      const collapsed = collapsedSidebarGroups.has(groupId);
+                      return (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => toggleSidebarGroup(groupId)}
+                            className="w-full px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-500 bg-[#050914] border-b border-white/5 sticky top-0 z-10 flex items-center justify-between hover:text-slate-300 transition-colors"
+                            aria-expanded={!collapsed}
+                            aria-controls="sidebar-group-ungrouped"
+                          >
+                            <span className="truncate">Без модуля</span>
+                            <span className="flex items-center gap-2">
+                              <span className="text-[10px] text-slate-600 font-mono">{sidebarLessonGroups.ungrouped.length}</span>
+                              {collapsed ? (
+                                <ChevronRight className="w-3.5 h-3.5" />
+                              ) : (
+                                <ChevronDown className="w-3.5 h-3.5" />
+                              )}
+                            </span>
+                          </button>
+                          {!collapsed ? (
+                            <div id="sidebar-group-ungrouped">
+                              {sidebarLessonGroups.ungrouped.map(({ lesson, idx }) => renderLessonNavButton(lesson, idx))}
+                            </div>
+                          ) : null}
+                        </>
+                      );
+                    })()}
                   </div>
                 ) : null}
               </>
