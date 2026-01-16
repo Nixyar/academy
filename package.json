@@ -19,7 +19,12 @@
     "@types/node": "^22.14.0",
     "@types/react": "^19.2.7",
     "@vitejs/plugin-react": "^5.0.0",
+    "puppeteer": "^22.15.0",
     "typescript": "~5.8.2",
-    "vite": "^6.2.0"
+    "vite": "^6.2.0",
+    "vite-plugin-prerender": "^1.0.8"
+  },
+  "overrides": {
+    "puppeteer": "^22.15.0"
   }
 }

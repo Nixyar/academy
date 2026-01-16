@@ -21,11 +21,12 @@ type View = 'landing' | 'course' | 'profile';
 type RouteState = {
   view: View;
   courseSlug: string | null;
+  landingPath?: '/' | '/courses';
 };
 
 const normalizeRoute = (route: RouteState): RouteState => {
   if (route.view === 'course' && !route.courseSlug) {
-    return { view: 'landing', courseSlug: null };
+    return { view: 'landing', courseSlug: null, landingPath: route.landingPath ?? '/' };
   }
   return route;
 };
@@ -40,10 +41,11 @@ const parseRouteFromLocation = (): RouteState => {
 
   if (segments[0] === 'courses') {
     const slug = segments[1] ? decodeURIComponent(segments[1]) : null;
+    if (!slug) return { view: 'landing', courseSlug: null, landingPath: '/courses' };
     return { view: 'course', courseSlug: slug };
   }
 
-  return { view: 'landing', courseSlug: null };
+  return { view: 'landing', courseSlug: null, landingPath: '/' };
 };
 
 const routeToPath = (route: RouteState): string => {
@@ -51,7 +53,7 @@ const routeToPath = (route: RouteState): string => {
   if (route.view === 'course' && route.courseSlug) {
     return `/courses/${encodeURIComponent(route.courseSlug)}`;
   }
-  return '/';
+  return route.landingPath ?? '/';
 };
 
 const OrbitLoader: React.FC<{ label?: string }> = ({ label }) => (
@@ -110,7 +112,7 @@ const App: React.FC = () => {
     setSelectedCourseId(null);
     setCurrentView('landing');
     setPendingCourseSlug(null);
-    syncRoute({ view: 'landing', courseSlug: null });
+    syncRoute({ view: 'landing', courseSlug: null, landingPath: '/' });
   };
 
   const navigateToProfile = () => {
