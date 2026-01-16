@@ -28,11 +28,6 @@ interface BackendLesson {
   lesson_type: string | null;
   lesson_type_ru?: string | null;
   sort_order?: number | null;
-  blocks?: unknown;
-  unlock_rule?: unknown;
-  settings?: unknown;
-  mode?: string | null;
-  settings_mode?: string | null;
 }
 
 interface BackendCourseModule {
@@ -56,31 +51,6 @@ function mapLessonType(lessonType?: string | null): LessonType {
     default:
       return LessonType.VIDEO_TEXT;
   }
-}
-
-function extractDescription(blocks: unknown): string {
-  if (!blocks) return 'Описание появится позже.';
-  if (typeof blocks === 'string') return blocks;
-  if (Array.isArray(blocks)) {
-    const joined = blocks
-      .map((block) => {
-        if (typeof block === 'string') return block;
-        if (block && typeof block === 'object' && 'content' in block && typeof (block as any).content === 'string') {
-          return (block as any).content;
-        }
-        return '';
-      })
-      .filter(Boolean)
-      .join('\n\n')
-      .trim();
-    if (joined) return joined;
-  }
-  if (blocks && typeof blocks === 'object') {
-    if ('content' in blocks && typeof (blocks as any).content === 'string') {
-      return (blocks as any).content as string;
-    }
-  }
-  return 'Описание появится позже.';
 }
 
 function mapCourse(row: BackendCourse): Course {
@@ -139,17 +109,12 @@ function mapLesson(row: BackendLesson): Lesson {
     moduleId,
     slug: row.slug ?? row.id,
     title: row.title ?? 'Без названия',
-    description: extractDescription(row.blocks),
+    description: '',
     type: mapLessonType(row.lesson_type),
     lessonType: row.lesson_type ?? null,
     lessonTypeRu: row.lesson_type_ru ?? null,
     sortOrder: typeof sortOrder === 'number' ? sortOrder : sortOrder == null ? null : Number(sortOrder),
-    blocks: row.blocks,
-    unlock_rule: row.unlock_rule,
     videoUrl: null,
-    settings: row.settings,
-    mode: row.mode ?? null,
-    settings_mode: row.settings_mode ?? null,
   };
 }
 
@@ -174,33 +139,18 @@ export async function fetchCourseContent(courseId: string): Promise<CourseConten
 
   const promise = (async () => {
     try {
-      try {
-        const result = await apiFetch<{ lessons?: BackendLesson[]; modules?: BackendCourseModule[] }>(
-          `/api/courses/${encodeURIComponent(id)}/content`,
-        );
-        const lessons = Array.isArray(result?.lessons) ? result.lessons : [];
-        const modules = Array.isArray(result?.modules) ? result.modules : [];
+      const result = await apiFetch<{ lessons?: BackendLesson[]; modules?: BackendCourseModule[] }>(
+        `/api/courses/${encodeURIComponent(id)}/content`,
+      );
+      const lessons = Array.isArray(result?.lessons) ? result.lessons : [];
+      const modules = Array.isArray(result?.modules) ? result.modules : [];
 
-        const content: CourseContent = {
-          lessons: lessons.map(mapLesson),
-          modules: modules.map(mapCourseModule),
-        };
-        contentCache.set(id, content);
-        return content;
-      } catch {
-        // Back-compat fallback for older backends.
-        const [lessons, modules] = await Promise.all([
-          apiFetch<BackendLesson[]>(
-            `/api/rest/v1/lessons?course_id=eq.${id}&order=sort_order.asc`,
-          ),
-          apiFetch<BackendCourseModule[]>(
-            `/api/rest/v1/course_modules?course_id=eq.${id}&order=sort_order.asc`,
-          ),
-        ]);
-        const content: CourseContent = { lessons: lessons.map(mapLesson), modules: modules.map(mapCourseModule) };
-        contentCache.set(id, content);
-        return content;
-      }
+      const content: CourseContent = {
+        lessons: lessons.map(mapLesson),
+        modules: modules.map(mapCourseModule),
+      };
+      contentCache.set(id, content);
+      return content;
     } finally {
       contentInFlight.delete(id);
     }
