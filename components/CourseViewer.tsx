@@ -6,7 +6,7 @@ import { FileText, Menu, X, ChevronLeft, ChevronRight, ChevronDown, Send, Info }
 import { fetchCourseProgress, fetchCourseResume, patchCourseProgress } from '../services/progressApi';
 import { ApiError, apiFetch } from '../services/apiClient';
 import { fetchCourseQuota, type CourseQuota } from '../services/courseQuotaApi';
-import { fetchLessonContent } from '../services/lessonsApi';
+import { fetchLessonContent, getCachedLessonContent } from '../services/lessonsApi';
 
 const IFRAME_BASE_STYLES = `
   :root { color-scheme: dark; }
@@ -275,9 +275,10 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
   useEffect(() => {
     let cancelled = false;
 
-    setActiveLessonContentLoading(true);
+    const cached = getCachedLessonContent(activeLesson.id);
+    setActiveLessonContent(cached);
+    setActiveLessonContentLoading(!cached);
     setActiveLessonContentError(null);
-    setActiveLessonContent(null);
 
     fetchLessonContent(activeLesson.id)
       .then((data) => {
@@ -286,10 +287,12 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
       })
       .catch((err) => {
         if (cancelled) return;
-        setActiveLessonContent(null);
-        setActiveLessonContentError(
-          describeApiError(err, 'Не удалось загрузить контент урока. Попробуйте обновить страницу.'),
-        );
+        if (!cached) {
+          setActiveLessonContent(null);
+          setActiveLessonContentError(
+            describeApiError(err, 'Не удалось загрузить контент урока. Попробуйте обновить страницу.'),
+          );
+        }
       })
       .finally(() => {
         if (cancelled) return;
@@ -1674,6 +1677,13 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
   const handlePromptSubmit = useCallback(async () => {
     const prompt = promptInput.trim();
     if (!prompt || isSendingPrompt) return;
+    if (!activeLessonContent) {
+      setLlmError(
+        activeLessonContentError
+          || 'Контент урока ещё загружается. Подождите пару секунд и попробуйте снова.',
+      );
+      return;
+    }
     if (quotaRequired && (courseQuotaLoading || !courseQuota)) {
       setLlmError(courseQuotaError || 'Не удалось проверить лимит запросов. Перезагрузите страницу и попробуйте ещё раз.');
       return;
@@ -1748,6 +1758,8 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
   }, [
     activeLesson.id,
     activeLessonMode,
+    activeLessonContent,
+    activeLessonContentError,
     applyProgressPatch,
     cleanupStream,
     course.id,
@@ -1954,6 +1966,9 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
                       onClick={handlePromptSubmit}
                       disabled={
                         isSendingPrompt ||
+                        activeLessonContentLoading ||
+                        !activeLessonContent ||
+                        Boolean(activeLessonContentError) ||
                         (quotaRequired && (courseQuotaLoading || !courseQuota)) ||
                         (courseQuota?.limit != null && courseQuota.remaining === 0)
                       }

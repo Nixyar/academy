@@ -37,10 +37,14 @@ export default defineConfig(({ mode }) => {
       }
     }
 
+    const prerenderHost = env.PRERENDER_HOST || process.env.PRERENDER_HOST || '127.0.0.1';
+    const prerenderPort = Number(env.PRERENDER_PORT || process.env.PRERENDER_PORT || 4179);
+    const enablePrerender = (env.PRERENDER || process.env.PRERENDER) === '1';
+
     return {
       server: {
         port: 3000,
-        host: '0.0.0.0',
+        host: env.VITE_DEV_HOST || '127.0.0.1',
         proxy: {
           '/api': {
             target: env.VITE_API_BASE_URL || 'https://api.vibecoderai.ru',
@@ -56,20 +60,25 @@ export default defineConfig(({ mode }) => {
       },
       plugins: [
         react(),
-        vitePrerender({
-          staticDir: path.join(__dirname, 'dist'),
-          routes: getPrerenderRoutes(),
-          server: {
-            port: 4179,
-          },
-          renderer: new SafePuppeteerRenderer({
-            executablePath: resolveChromeExecutablePath(),
-            renderAfterDocumentEvent: 'prerender-ready',
-            ...(process.platform === 'linux'
-              ? { args: ['--no-sandbox', '--disable-setuid-sandbox'] }
-              : null),
-          }),
-        }),
+        ...(enablePrerender
+          ? [
+            vitePrerender({
+              staticDir: path.join(__dirname, 'dist'),
+              routes: getPrerenderRoutes(),
+              server: {
+                host: prerenderHost,
+                port: prerenderPort,
+              },
+              renderer: new SafePuppeteerRenderer({
+                executablePath: resolveChromeExecutablePath(),
+                renderAfterDocumentEvent: 'prerender-ready',
+                ...(process.platform === 'linux'
+                  ? { args: ['--no-sandbox', '--disable-setuid-sandbox'] }
+                  : null),
+              }),
+            }),
+          ]
+          : []),
       ],
       define: {
         'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),

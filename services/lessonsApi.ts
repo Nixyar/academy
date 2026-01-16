@@ -20,6 +20,12 @@ async function readJsonSafe(response: Response): Promise<unknown> {
   }
 }
 
+export function getCachedLessonContent(lessonId: string): LessonContent | null {
+  const id = String(lessonId || '').trim();
+  if (!id) return null;
+  return contentCache.get(id)?.data ?? null;
+}
+
 export async function fetchLessonContent(lessonId: string): Promise<LessonContent> {
   const id = String(lessonId || '').trim();
   if (!id) return { blocks: null, settings: null, unlock_rule: null };
