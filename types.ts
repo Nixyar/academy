@@ -11,6 +11,7 @@ export interface Course {
   price?: number | null;
   salePrice?: number | null;
   currency?: string | null;
+  llmLimit?: number | null;
   isPurchased?: boolean;
   isFree: boolean;
   lessons: Lesson[];

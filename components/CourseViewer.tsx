@@ -242,6 +242,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
   const [promptInput, setPromptInput] = useState('');
   const [isSendingPrompt, setIsSendingPrompt] = useState(false);
   const [courseQuota, setCourseQuota] = useState<CourseQuota | null>(null);
+  const [courseQuotaLoading, setCourseQuotaLoading] = useState(false);
   const [llmHtml, setLlmHtml] = useState<string | null>(null);
   const [llmError, setLlmError] = useState<string | null>(null);
   const [llmOutline, setLlmOutline] = useState<unknown>(null);
@@ -581,24 +582,37 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     let cancelled = false;
 
     void (async () => {
+      if (!quotaRequired) {
+        setCourseQuota(null);
+        setCourseQuotaLoading(false);
+        return;
+      }
+
       try {
+        setCourseQuotaLoading(true);
         const quota = await fetchCourseQuota(course.id);
         if (!cancelled) setCourseQuota(quota);
       } catch (error) {
         console.warn('Failed to load course quota', error);
         if (!cancelled) setCourseQuota(null);
+      } finally {
+        if (!cancelled) setCourseQuotaLoading(false);
       }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [course.id]);
+  }, [course.id, quotaRequired]);
 
   const isWorkshopLesson = useMemo(
     () => (activeLesson.lessonType ?? '').toLowerCase() === 'workshop',
     [activeLesson.lessonType],
   );
+  const quotaRequired = useMemo(() => {
+    const limit = (course as any)?.llmLimit;
+    return isWorkshopLesson && typeof limit === 'number' && Number.isFinite(limit) && limit > 0;
+  }, [course, isWorkshopLesson]);
   const isLectureLesson = useMemo(
     () => (activeLesson.lessonType ?? '').toLowerCase() === 'lecture',
     [activeLesson.lessonType],
@@ -1604,6 +1618,10 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
   const handlePromptSubmit = useCallback(async () => {
     const prompt = promptInput.trim();
     if (!prompt || isSendingPrompt) return;
+    if (quotaRequired && (courseQuotaLoading || !courseQuota)) {
+      setLlmError('Не удалось проверить лимит запросов. Перезагрузите страницу и попробуйте ещё раз.');
+      return;
+    }
     if (courseQuota?.limit != null && courseQuota.remaining === 0) {
       setLlmError('Лимит запросов для этого курса исчерпан.');
       return;
@@ -1679,8 +1697,10 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     course.id,
     courseQuota?.limit,
     courseQuota?.remaining,
+    courseQuotaLoading,
     isSendingPrompt,
     promptInput,
+    quotaRequired,
     startHtmlStream,
     syncProgress,
   ]);
@@ -1854,22 +1874,30 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
                     }`}
                   placeholder={isLectureLesson ? '' : 'Console ready...'}
                 />
-                {isWorkshopLesson && courseQuota?.limit != null && (
-                  <div className="absolute top-3 right-3 text-[10px] text-slate-300/80 font-mono px-2 py-1 bg-white/5 border border-white/10 rounded">
-                    Осталось: {courseQuota.remaining ?? 0}
-                  </div>
-                )}
                 {isWorkshopLesson && promptInput.trim().length > 0 && (
-                  <button
-                    type="button"
-                    onClick={handlePromptSubmit}
-                    disabled={isSendingPrompt || (courseQuota?.limit != null && courseQuota.remaining === 0)}
-                    className="absolute bottom-3 right-3 px-3 py-1.5 rounded-lg bg-vibe-600 text-white text-xs font-semibold flex items-center gap-2 shadow-lg shadow-vibe-900/30 hover:bg-vibe-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                    style={{ cursor: 'pointer' }}
-                  >
-                    <Send className="w-4 h-4" />
-                    {isSendingPrompt ? 'Отправляем...' : 'Отправить'}
-                  </button>
+                  <div className="absolute bottom-3 right-3 flex items-center gap-3">
+                    {quotaRequired && (
+                      <span className="text-[11px] text-slate-400/80 font-mono">
+                        {courseQuotaLoading || !courseQuota
+                          ? 'Проверяем лимит...'
+                          : `Осталось запросов: ${courseQuota.remaining ?? 0}`}
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={handlePromptSubmit}
+                      disabled={
+                        isSendingPrompt ||
+                        (quotaRequired && (courseQuotaLoading || !courseQuota)) ||
+                        (courseQuota?.limit != null && courseQuota.remaining === 0)
+                      }
+                      className="px-3 py-1.5 rounded-lg bg-vibe-600 text-white text-xs font-semibold flex items-center gap-2 shadow-lg shadow-vibe-900/30 hover:bg-vibe-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      style={{ cursor: 'pointer' }}
+                    >
+                      <Send className="w-4 h-4" />
+                      {isSendingPrompt ? 'Отправляем...' : 'Отправить'}
+                    </button>
+                  </div>
                 )}
               </div>
             </div>
