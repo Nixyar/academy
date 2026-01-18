@@ -604,7 +604,9 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
         const progressData = await fetchCourseProgress(course.id);
 
         if (cancelled) return;
-        syncProgress(progressData ?? {});
+        if (progressData) {
+          syncProgress(progressData);
+        }
 
         const resumeLessonId = progressData?.resume_lesson_id || progressData?.last_viewed_lesson_id;
         const resumeIndex = resumeLessonId
@@ -1212,12 +1214,25 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
   }, [llmHtml, liveHtmlFromParts]);
 
   const previewWorkspace = useMemo<Workspace>(() => {
-    if (storedWorkspace.source === 'files') return storedWorkspace;
-    const html = liveSingleHtml ?? storedWorkspace.files['index.html'] ?? '';
-    return { files: { 'index.html': html }, activeFile: 'index.html', source: storedWorkspace.source };
-  }, [liveSingleHtml, storedWorkspace]);
+    // If we have live HTML content being generated, it should override or merge into the workspace.
+    if (liveSingleHtml) {
+      // In 'create' mode, we want a clean slate showing only the new index.html.
+      if (activeLessonMode === 'create') {
+        return { files: { 'index.html': liveSingleHtml }, activeFile: 'index.html', source: 'html' };
+      }
+      // For 'edit' or 'add_page', we merge the live version into the existing files.
+      // Note: Currently the system primarily streams into 'index.html' or a single HTML view.
+      const files = { ...storedWorkspace.files, 'index.html': liveSingleHtml };
+      return { files, activeFile: 'index.html', source: storedWorkspace.source };
+    }
 
-  const previewExtraCss = storedWorkspace.source === 'files' ? null : (llmCss ?? null);
+    return storedWorkspace;
+  }, [activeLessonMode, liveSingleHtml, storedWorkspace]);
+
+  const previewExtraCss = useMemo(() => {
+    if (liveSingleHtml) return llmCss ?? null;
+    return storedWorkspace.source === 'files' ? null : (llmCss ?? null);
+  }, [liveSingleHtml, llmCss, storedWorkspace.source]);
 
   const [uiActiveFile, setUiActiveFile] = useState<string>('index.html');
 
@@ -1701,11 +1716,11 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     setLlmCss(null);
     setLlmSections({});
     setLlmSectionOrder([]);
-    setLlmOutline(null);
-    llmCssRef.current = null;
-    llmSectionsRef.current = {};
-    llmSectionOrderRef.current = [];
     llmOutlineRef.current = null;
+
+    if (activeLessonMode === 'create') {
+      setUiActiveFile('index.html');
+    }
 
     try {
       await applyProgressPatch({
@@ -1770,6 +1785,14 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     syncProgress,
   ]);
 
+  // On mount, if we have an active job, initialize the heartbeat ref 
+  // to prevent the stall detector from firing before the stream starts.
+  useEffect(() => {
+    if (activeJobId && (activeJobStatus === 'running' || activeJobStatus === 'queued')) {
+      streamLastEventAtRef.current = Date.now();
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     if (activeJobStatus !== 'running' && activeJobStatus !== 'queued') {
       streamingJobIdRef.current = null;
@@ -1777,8 +1800,13 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     }
     if (!isActiveJobForLesson) return;
     if (!activeJobId) return;
+
+    // If we are already streaming THIS jobId, don't restart.
     if (streamingJobIdRef.current === activeJobId) return;
 
+    // IMPORTANT: If we are on mount and just recovered jobId from state, 
+    // we want to start the stream but ONLY if we haven't already.
+    // cleanupStream will abort any existing controller.
     cleanupStream();
     setIsSendingPrompt(true);
     setLlmError(null);
