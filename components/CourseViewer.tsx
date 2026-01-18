@@ -1655,7 +1655,15 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
           setLlmStatusText(null);
         } finally {
           if (!controller.signal.aborted) {
-            streamControllerRef.current = null;
+            // If the SSE connection ended unexpectedly (e.g. proxy/server closed the stream),
+            // keep the controller reference and force the stall poller to kick in immediately.
+            // This allows us to recover via `/api/v1/html/result` instead of getting stuck.
+            if (streamingJobIdRef.current === jobId) {
+              streamLastEventAtRef.current = Date.now() - 25000;
+              setLlmStatusText((current) => current ?? 'Соединение со стримом закрыто. Проверяем результат...');
+            } else {
+              streamControllerRef.current = null;
+            }
           }
         }
       };
