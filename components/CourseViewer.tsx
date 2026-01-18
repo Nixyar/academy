@@ -1680,7 +1680,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     if (!activeLessonContent) {
       setLlmError(
         activeLessonContentError
-          || 'Контент урока ещё загружается. Подождите пару секунд и попробуйте снова.',
+        || 'Контент урока ещё загружается. Подождите пару секунд и попробуйте снова.',
       );
       return;
     }
@@ -1840,7 +1840,13 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     }
   }, [activeJobStatus, savedResultHtml, storedWorkspace.source]);
 
-  type LessonBlockItem = { key: string; content: string; prompt: string; blockType: string | null };
+  type LessonBlockItem = {
+    key: string;
+    content: string;
+    prompt: string;
+    blockType: string | null;
+    items?: string[] | null;
+  };
 
   const blockItems = useMemo<LessonBlockItem[]>(() => {
     if (!visibleBlocks.length) {
@@ -1863,6 +1869,16 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
       .map((block, idx) => {
         const key = typeof (block as any)?.id === 'string' ? (block as any).id : `block-${idx}`;
         const blockType = typeof (block as any)?.type === 'string' ? (block as any).type : null;
+        const items =
+          block &&
+            typeof block === 'object' &&
+            blockType === 'list' &&
+            Array.isArray((block as any).items)
+            ? ((block as any).items as unknown[])
+              .filter((item) => typeof item === 'string')
+              .map((item) => (item as string).trimEnd())
+              .filter((item) => item.trim().length > 0)
+            : null;
         const content =
           typeof block === 'string'
             ? block
@@ -1874,8 +1890,17 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
             ? (block as any).prompt.trim()
             : '';
 
+        if (blockType === 'divider') {
+          return { key, content: '', prompt: '', blockType, items: null };
+        }
+
+        if (blockType === 'list') {
+          if (!items || items.length === 0) return null;
+          return { key, content, prompt, blockType, items };
+        }
+
         if (!content && !prompt) return null;
-        return { key, content, prompt, blockType };
+        return { key, content, prompt, blockType, items: null };
       })
       .filter(Boolean) as LessonBlockItem[];
   }, [activeLesson.description, activeLessonContentError, activeLessonContentLoading, visibleBlocks]);
@@ -1893,37 +1918,84 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
         return (
           <div className="flex flex-col h-full bg-[#050914] border-l border-white/5">
             <div className="flex-1 border-b border-white/5 relative overflow-hidden">
-              {hasRenderablePreview ? (
+              {hasRenderablePreview && (
                 <div className="absolute inset-0 flex flex-col">
-	                  <iframe
-	                    ref={previewIframeRef}
-	                    key={`${activeLesson.id}-${uiActiveFile}`}
-	                    srcDoc={iframeSrcDoc}
-	                    title="LLM Generated Site"
-	                    className="w-full flex-1 bg-black"
-	                    sandbox="allow-scripts"
-	                  />
-	                </div>
-	              ) : (
+                  <iframe
+                    ref={previewIframeRef}
+                    key={`${activeLesson.id}-${uiActiveFile}`}
+                    srcDoc={iframeSrcDoc}
+                    title="LLM Generated Site"
+                    className="w-full flex-1 bg-black"
+                    sandbox="allow-scripts"
+                  />
+                </div>
+              )}
+
+              {/* Enhanced Non-blocking Loading Widget */}
+              {(isSendingPrompt || activeJobStatus === 'running') && (
+                <div className="absolute bottom-6 right-6 z-40 w-80 pointer-events-none">
+                  <div className="bg-[#0f172a]/80 backdrop-blur-xl border border-white/10 rounded-2xl p-4 shadow-2xl ring-1 ring-white/5 animate-in fade-in slide-in-from-bottom-4 duration-500 pointer-events-auto">
+                    <div className="flex items-start gap-4">
+                      <div className="relative mt-1">
+                        <div className="w-10 h-10 rounded-xl bg-vibe-500/20 flex items-center justify-center border border-vibe-500/30">
+                          <div className="w-4 h-4 border-2 border-vibe-400 border-t-transparent rounded-full animate-spin"></div>
+                        </div>
+                        <div className="absolute -top-1 -right-1 w-3 h-3 bg-vibe-500 rounded-full animate-pulse border-2 border-[#0f172a]"></div>
+                      </div>
+
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-vibe-400 px-2 py-0.5 rounded-md bg-vibe-500/10 border border-vibe-500/20">
+                            {(() => {
+                              const jobLessonId = activeJobLessonId || activeLesson.id;
+                              const jobLesson = course.lessons.find(l => l.id === jobLessonId);
+                              const mode = jobLesson ? getLessonMode(jobLesson) : activeLessonMode;
+
+                              if (mode === 'create') return 'Создание';
+                              if (mode === 'edit') return 'Редактирование';
+                              if (mode === 'add_page') return 'Добавление';
+                              return 'Запрос к vibecoderai';
+                            })()}
+                          </span>
+                          <div className="h-1 w-1 rounded-full bg-slate-600"></div>
+                          <span className="text-[10px] text-slate-400 font-mono truncate">
+                            v1.0.4
+                          </span>
+                        </div>
+
+                        <h4 className="text-xs font-semibold text-slate-100 mb-1 flex items-center gap-2">
+                          <span className="opacity-50">Text to:</span>
+                          <span className="truncate italic">"{(activeJobPrompt || promptInput || '').slice(0, 30)}{(activeJobPrompt || promptInput || '').length > 30 ? '...' : ''}"</span>
+                        </h4>
+
+                        <div className="space-y-1.5 mt-3">
+                          <div className="flex justify-between items-center text-[10px] font-mono">
+                            <span className="text-slate-400 truncate max-w-[180px]">
+                              {llmStatusText || (activeJobStatus === 'running' ? 'Генерация продолжается...' : 'Инициализация...')}
+                            </span>
+                            <span className="text-vibe-400 animate-pulse">Running</span>
+                          </div>
+                          <div className="w-full h-1 bg-white/5 rounded-full overflow-hidden">
+                            <div
+                              className="h-full bg-gradient-to-r from-vibe-600 via-vibe-400 to-vibe-600 animate-progress-glow transform-gpu"
+                              style={{ backgroundSize: '200% 100%' }}
+                            ></div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {!hasRenderablePreview && !isSendingPrompt && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-400 gap-3 p-6 text-center">
-                  {isSendingPrompt ? (
-                    <>
-                      <div className="w-10 h-10 border-2 border-white/10 border-t-vibe-500 rounded-full animate-spin"></div>
-                      <p className="font-mono text-sm text-slate-200">Генерируем сайт...</p>
-                      {llmStatusText && (
-                        <p className="text-xs text-slate-400 max-w-md">{llmStatusText}</p>
-                      )}
-                    </>
-                  ) : (
-                    <>
-                      <FileText className="w-16 h-16 opacity-20" />
-                      <p className="font-mono text-sm">Waiting for input...</p>
-                      {!isWorkshopLesson && (
-                        <p className="text-xs mt-1 opacity-50">
-                          В этом уроке нет интерактивного задания AI.
-                        </p>
-                      )}
-                    </>
+                  <FileText className="w-16 h-16 opacity-20" />
+                  <p className="font-mono text-sm">Waiting for input...</p>
+                  {!isWorkshopLesson && (
+                    <p className="text-xs mt-1 opacity-50">
+                      В этом уроке нет интерактивного задания AI.
+                    </p>
                   )}
                 </div>
               )}
@@ -2120,7 +2192,39 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
 
               <div className="prose prose-invert prose-lg prose-headings:font-display prose-p:text-slate-400 prose-strong:text-white max-w-none space-y-6">
                 {blockItems.map((block, idx) =>
-                  block.blockType === 'tip' ? (
+                  block.blockType === 'divider' ? (
+                    <div key={block.key} className="not-prose py-2">
+                      <hr className="border-white/10" />
+                    </div>
+                  ) : block.blockType === 'list' ? (
+                    <div key={block.key} className="not-prose">
+                      {block.content && (
+                        <p className="whitespace-pre-line leading-relaxed text-slate-300 mb-3">{block.content}</p>
+                      )}
+                      <ul className="list-disc pl-6 space-y-2 text-slate-300">
+                        {(block.items ?? []).map((item, itemIdx) => (
+                          <li key={itemIdx} className="whitespace-pre-line leading-relaxed">
+                            {item}
+                          </li>
+                        ))}
+                      </ul>
+                      {block.prompt && (
+                        <div className="relative mt-4 p-4 md:p-5 rounded-xl bg-[#0b1020] border border-vibe-500/30">
+                          <button
+                            type="button"
+                            onClick={() => handleCopyPrompt(block.prompt, idx)}
+                            className="absolute -top-3 right-4 text-[9px] md:text-[10px] uppercase tracking-wide px-2.5 py-1.5 rounded-md border border-white/15 text-slate-200 bg-white/5 backdrop-blur-sm hover:bg-white/10 hover:border-vibe-400/40 hover:text-white transition-colors shadow-lg shadow-black/30"
+                            style={{ cursor: 'pointer' }}
+                          >
+                            {copiedPromptBlock === idx ? 'Скопировано' : 'Скопировать'}
+                          </button>
+                          <p className="text-xs md:text-sm text-white whitespace-pre-line leading-relaxed">
+                            {block.prompt}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  ) : block.blockType === 'tip' ? (
                     <div key={block.key} className="not-prose space-y-2">
                       <p className="text-[11px] uppercase tracking-[0.32em] text-slate-400 font-semibold">
                         Практические советы
