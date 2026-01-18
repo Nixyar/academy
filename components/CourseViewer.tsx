@@ -409,6 +409,62 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     [course.id, onProgressChange],
   );
 
+  const setLocalActiveJobStatus = useCallback(
+    (
+      jobId: string | null,
+      status: 'queued' | 'running' | 'done' | 'failed',
+      opts?: { code?: string | null; details?: string | null },
+    ) => {
+      const resolvedJobId = typeof jobId === 'string' ? jobId : null;
+      if (!resolvedJobId) return;
+
+      const prev = courseProgressRef.current ?? {};
+      const currentActive = (prev as any)?.active_job;
+      const currentJobId =
+        currentActive && typeof currentActive === 'object'
+          ? (currentActive.jobId ?? currentActive.job_id ?? null)
+          : null;
+      if (currentJobId && currentJobId !== resolvedJobId) return;
+
+      const now = new Date().toISOString();
+      const code = typeof opts?.code === 'string' && opts.code.trim() ? opts.code.trim() : null;
+      const details = typeof opts?.details === 'string' && opts.details.trim() ? opts.details.trim() : null;
+
+      const nextActiveJob: any = {
+        ...(currentActive && typeof currentActive === 'object' ? currentActive : {}),
+        jobId: resolvedJobId,
+        status,
+        updatedAt: now,
+      };
+
+      if (status === 'failed') {
+        nextActiveJob.error = code || nextActiveJob.error || 'FAILED';
+        if (details) nextActiveJob.error_details = details;
+      } else {
+        // Clear stale error fields on success/transition
+        if ('error' in nextActiveJob) delete nextActiveJob.error;
+        if ('error_details' in nextActiveJob) delete nextActiveJob.error_details;
+      }
+
+      const next: CourseProgress = {
+        ...(prev as any),
+        active_job: nextActiveJob,
+        active_job_status: status,
+        ...(status === 'failed'
+          ? {
+            active_job_error: nextActiveJob.error,
+            ...(nextActiveJob.error_details ? { active_job_error_details: nextActiveJob.error_details } : null),
+          }
+          : null),
+      };
+
+      courseProgressRef.current = next;
+      setCourseProgress(next);
+      onProgressChange?.(course.id, next);
+    },
+    [course.id, onProgressChange],
+  );
+
   const markLocalActiveJobFailed = useCallback(
     (jobId: string | null, opts?: { code?: string | null; details?: string | null; message?: string | null }) => {
       const resolvedJobId = typeof jobId === 'string' ? jobId : null;
@@ -1667,6 +1723,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
             ? { ...(payload as any), html: (payload as any).content }
             : payload ?? {};
         applyFinalPayload(finalPayload, { final: true });
+        setLocalActiveJobStatus(streamingJobIdRef.current ?? activeJobId, 'done');
         setLlmStatusText(null);
         // For edit/add_page jobs the SSE payload may not include full HTML; refresh progress to get updated workspace.
         void (async () => {
@@ -1729,7 +1786,17 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
         });
       }
     },
-    [activeJobId, applyFinalPayload, buildHtml, cleanupStream, course.id, markLocalActiveJobFailed, parseJsonSafe, syncProgress],
+    [
+      activeJobId,
+      applyFinalPayload,
+      buildHtml,
+      cleanupStream,
+      course.id,
+      markLocalActiveJobFailed,
+      parseJsonSafe,
+      setLocalActiveJobStatus,
+      syncProgress,
+    ],
   );
 
   const handleStreamEventRef = useRef(handleStreamEvent);
@@ -1898,6 +1965,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
         const status = typeof result?.status === 'string' ? result.status : null;
         if (status === 'done') {
           applyFinalPayload(result ?? {}, { final: true });
+          setLocalActiveJobStatus(activeJobId, 'done');
           setLlmStatusText(null);
           try {
             const refreshed = await fetchCourseProgress(course.id, { skipCache: true });
@@ -1960,6 +2028,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     isActiveJobForLesson,
     isSendingPrompt,
     markLocalActiveJobFailed,
+    setLocalActiveJobStatus,
     syncProgress,
   ]);
 
@@ -2034,7 +2103,17 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     setLlmSectionOrder([]);
     llmOutlineRef.current = null;
 
-    if (activeLessonMode === 'create') {
+    // Re-fetch lesson content without ETag before starting, to avoid stale cached settings (mode).
+    let requestedMode = activeLessonMode;
+    try {
+      const fresh = await fetchLessonContent(activeLesson.id, { bypassCache: true });
+      setActiveLessonContent(fresh);
+      requestedMode = getLessonMode({ ...activeLesson, ...(fresh ?? {}) });
+    } catch (error) {
+      console.warn('Failed to refresh lesson content before start', error);
+    }
+
+    if (requestedMode === 'create') {
       setUiActiveFile('index.html');
     }
 
@@ -2049,7 +2128,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
         '/api/v1/html/start',
         {
           method: 'POST',
-          body: JSON.stringify({ prompt, lessonId: activeLesson.id, mode: activeLessonMode, courseId: course.id }),
+          body: JSON.stringify({ prompt, lessonId: activeLesson.id, mode: requestedMode, courseId: course.id }),
         },
       );
 
@@ -2073,6 +2152,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
             lessonId: activeLesson.id,
             courseId: course.id,
             prompt,
+            mode: requestedMode,
             startedAt: now,
             updatedAt: now,
           } as any,
@@ -2105,6 +2185,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     }
   }, [
     activeLesson.id,
+    activeLesson,
     activeLessonMode,
     activeLessonContent,
     activeLessonContentError,
@@ -2120,6 +2201,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     quotaRequired,
     startHtmlStream,
     syncProgress,
+    onProgressChange,
   ]);
 
   // On mount, if we have an active job, initialize the heartbeat ref 
@@ -2323,11 +2405,6 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
                             VibeCoderAi v1.0.4
                           </span>
                         </div>
-
-                        <h4 className="text-xs font-semibold text-slate-100 mb-1 flex items-center gap-2">
-                          <span className="opacity-50">Text to:</span>
-                          <span className="truncate italic">"{(activeJobPrompt || promptInput || '').slice(0, 30)}{(activeJobPrompt || promptInput || '').length > 30 ? '...' : ''}"</span>
-                        </h4>
 
                         <div className="space-y-1.5 mt-3">
                           <div className="flex justify-between items-center text-[10px] font-mono">
