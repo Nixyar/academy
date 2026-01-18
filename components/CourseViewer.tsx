@@ -215,6 +215,31 @@ const getValueByPath = (source: unknown, path: string): unknown => {
   return path.split('.').reduce((acc: any, key) => (acc && typeof acc === 'object' ? acc[key] : undefined), source);
 };
 
+const renderMarkdownBold = (text: string): React.ReactNode => {
+  const input = String(text ?? '');
+  if (!input.includes('**')) return input;
+
+  const parts: React.ReactNode[] = [];
+  const re = /\*\*([\s\S]+?)\*\*/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  let key = 0;
+
+  while ((match = re.exec(input)) !== null) {
+    const start = match.index;
+    const end = start + match[0].length;
+    const before = input.slice(lastIndex, start);
+    if (before) parts.push(before);
+    parts.push(<strong key={`b-${key}`} className="font-semibold">{match[1]}</strong>);
+    key += 1;
+    lastIndex = end;
+  }
+
+  const rest = input.slice(lastIndex);
+  if (rest) parts.push(rest);
+  return parts.length ? parts : input;
+};
+
 export const CourseViewer: React.FC<CourseViewerProps> = ({
   course,
   onBack,
@@ -224,6 +249,10 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
 }) => {
   const apiBaseUrl =
     (import.meta as any).env?.DEV === true ? '' : (import.meta as any).env?.VITE_API_BASE_URL ?? '';
+  const apiBaseUrlRef = useRef(apiBaseUrl);
+  useEffect(() => {
+    apiBaseUrlRef.current = apiBaseUrl;
+  }, [apiBaseUrl]);
   const [activeLessonIndex, setActiveLessonIndex] = useState(() => {
     const resumeId = initialProgress?.resume_lesson_id || initialProgress?.last_viewed_lesson_id;
     if (resumeId) {
@@ -251,6 +280,10 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
   const [copiedExample, setCopiedExample] = useState<number | null>(null);
   const [copiedPromptBlock, setCopiedPromptBlock] = useState<number | null>(null);
   const [courseProgress, setCourseProgress] = useState<CourseProgress>(initialProgress ?? {});
+  const courseProgressRef = useRef<CourseProgress>(initialProgress ?? {});
+  useEffect(() => {
+    courseProgressRef.current = courseProgress;
+  }, [courseProgress]);
   const [progressLoading, setProgressLoading] = useState(false);
   const [promptInput, setPromptInput] = useState('');
   const [isSendingPrompt, setIsSendingPrompt] = useState(false);
@@ -271,6 +304,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
   const streamControllerRef = useRef<AbortController | null>(null);
   const streamingJobIdRef = useRef<string | null>(null);
   const streamLastEventAtRef = useRef<number>(0);
+  const canPersistPromptRef = useRef(true);
 
   useEffect(() => {
     let cancelled = false;
@@ -345,7 +379,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
             : null)
         : null;
   const activeJobLessonId = typeof rawActiveJobLessonId === 'string' ? rawActiveJobLessonId : null;
-  const isPromptLocked = Boolean(activeJobStatus);
+  const isPromptLocked = activeJobStatus === 'running' || activeJobStatus === 'queued';
   const isActiveJobForLesson = activeJobLessonId ? activeJobLessonId === activeLesson.id : false;
   const isPromptLockedForLesson = isPromptLocked && isActiveJobForLesson;
   const savedResultHtml =
@@ -368,6 +402,48 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
 
   const syncProgress = useCallback(
     (next: CourseProgress) => {
+      courseProgressRef.current = next;
+      setCourseProgress(next);
+      onProgressChange?.(course.id, next);
+    },
+    [course.id, onProgressChange],
+  );
+
+  const markLocalActiveJobFailed = useCallback(
+    (jobId: string | null, opts?: { code?: string | null; details?: string | null; message?: string | null }) => {
+      const resolvedJobId = typeof jobId === 'string' ? jobId : null;
+      if (!resolvedJobId) return;
+
+      const prev = courseProgressRef.current ?? {};
+      const currentActive = (prev as any)?.active_job;
+      const currentJobId =
+        currentActive && typeof currentActive === 'object'
+          ? (currentActive.jobId ?? currentActive.job_id ?? null)
+          : null;
+      if (currentJobId && currentJobId !== resolvedJobId) return;
+
+      const now = new Date().toISOString();
+      const code = typeof opts?.code === 'string' && opts.code.trim() ? opts.code.trim() : 'FAILED';
+      const details = typeof opts?.details === 'string' && opts.details.trim() ? opts.details.trim() : null;
+
+      const nextActiveJob = {
+        ...(currentActive && typeof currentActive === 'object' ? currentActive : {}),
+        jobId: resolvedJobId,
+        status: 'failed',
+        updatedAt: now,
+        error: code,
+        ...(details ? { error_details: details } : null),
+      };
+
+      const next: CourseProgress = {
+        ...(prev as any),
+        active_job: nextActiveJob,
+        active_job_status: 'failed',
+        active_job_error: code,
+        ...(details ? { active_job_error_details: details } : null),
+      };
+
+      courseProgressRef.current = next;
       setCourseProgress(next);
       onProgressChange?.(course.id, next);
     },
@@ -375,17 +451,27 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
   );
 
   useEffect(() => {
+    courseProgressRef.current = initialProgress ?? {};
     setCourseProgress(initialProgress ?? {});
   }, [initialProgress, course.id]);
 
   const applyProgressPatch = useCallback(
     async (patch: Parameters<typeof patchCourseProgress>[1]): Promise<CourseProgress | undefined> => {
+      if ((patch as any)?.op === 'lesson_prompt' && !canPersistPromptRef.current) {
+        return undefined;
+      }
       try {
         const updated = await patchCourseProgress(course.id, patch);
         syncProgress(updated ?? {});
         return updated ?? {};
       } catch (error) {
         console.error('Failed to update progress', error);
+        if ((patch as any)?.op === 'lesson_prompt' && error instanceof ApiError) {
+          const code = (error.body as any)?.error;
+          if (code === 'FAILED_TO_SAVE_LESSON_PROMPT') {
+            canPersistPromptRef.current = false;
+          }
+        }
         return undefined;
       }
     },
@@ -611,11 +697,10 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
           if (cancelled) return;
 
           const statusActiveJob = (statusProgress as any)?.active_job ?? null;
-          setCourseProgress((prev) => {
-            const next = { ...(prev ?? {}), active_job: statusActiveJob };
-            onProgressChange?.(course.id, next);
-            return next;
-          });
+          const next = { ...(courseProgressRef.current ?? {}), active_job: statusActiveJob };
+          courseProgressRef.current = next;
+          setCourseProgress(next);
+          onProgressChange?.(course.id, next);
           return;
         }
 
@@ -897,17 +982,42 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
       // Keep spinner while we continue streaming the same job
       setIsSendingPrompt(true);
     } else {
-      setIsSendingPrompt(activeJobStatus === 'running' && isActiveJobForLesson && !hasSavedHtml);
-      setLlmHtml(hasSavedHtml && !hasStoredFilesResult ? savedResultHtml : null);
-      setLlmError(failedMessage);
-      setLlmOutline(null);
-      setLlmCss(null);
-      setLlmSections({});
-      setLlmSectionOrder([]);
-      llmCssRef.current = null;
-      llmSectionsRef.current = {};
-      llmSectionOrderRef.current = [];
-      llmOutlineRef.current = null;
+      const runningForLesson =
+        (activeJobStatus === 'running' || activeJobStatus === 'queued') && isActiveJobForLesson;
+      const doneForLesson = activeJobStatus === 'done' && isActiveJobForLesson;
+
+      // While a job is running, don't fall back to showing the previous saved HTML:
+      // it makes it look like the generation "stopped" after refresh.
+      setIsSendingPrompt(runningForLesson);
+      if (runningForLesson) {
+        setLlmHtml(null);
+        setLlmError(null);
+        if (lessonChanged) {
+          setLlmOutline(null);
+          setLlmCss(null);
+          setLlmSections({});
+          setLlmSectionOrder([]);
+          llmCssRef.current = null;
+          llmSectionsRef.current = {};
+          llmSectionOrderRef.current = [];
+          llmOutlineRef.current = null;
+        }
+      } else if (doneForLesson) {
+        // Keep the last streamed/polled preview visible until course progress is refreshed.
+        // Otherwise we can briefly show an old stored site right when the job completes.
+        setLlmError(failedMessage);
+      } else {
+        setLlmHtml(hasSavedHtml && !hasStoredFilesResult ? savedResultHtml : null);
+        setLlmError(failedMessage);
+        setLlmOutline(null);
+        setLlmCss(null);
+        setLlmSections({});
+        setLlmSectionOrder([]);
+        llmCssRef.current = null;
+        llmSectionsRef.current = {};
+        llmSectionOrderRef.current = [];
+        llmOutlineRef.current = null;
+      }
     }
   }, [
     activeJobId,
@@ -1392,7 +1502,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
           const currentResult = (prev as any).result || {};
           const payloadMeta = (payload?.result?.meta || payload?.meta || {}) as Record<string, any>;
 
-          return {
+          const next = {
             ...prev,
             result: {
               ...currentResult,
@@ -1404,6 +1514,8 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
               },
             },
           };
+          courseProgressRef.current = next as any;
+          return next;
         });
 
         // If we switched files or updated the active one, reflect that in UI
@@ -1424,10 +1536,23 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
       const errorMessage =
         typeof payload?.error === 'string'
           ? payload.error
+          : payload?.error && typeof payload.error === 'object'
+            ? (typeof (payload as any).error.message === 'string'
+              ? (payload as any).error.message
+              : (typeof (payload as any).error.error === 'string' ? (payload as any).error.error : null))
           : typeof payload?.message === 'string'
             ? payload.message
             : null;
-      if (errorMessage) setLlmError(errorMessage);
+      const errorDetailsRaw =
+        payload?.error && typeof payload.error === 'object'
+          ? ((payload as any).error.details ?? (payload as any).error.error_details ?? null)
+          : null;
+      const errorDetails = typeof errorDetailsRaw === 'string' && errorDetailsRaw.trim()
+        ? errorDetailsRaw.trim()
+        : null;
+      if (errorMessage) {
+        setLlmError(errorDetails ? `${errorMessage}: ${errorDetails}` : errorMessage);
+      }
 
       if (isFinal) {
         setIsSendingPrompt(false);
@@ -1585,6 +1710,11 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
                 ? (payload as any).html
                 : extractHtml(data),
           }, { final: true });
+          markLocalActiveJobFailed(streamingJobIdRef.current ?? activeJobId, {
+            code: typeof (payload as any)?.error === 'string' ? (payload as any).error : null,
+            details: typeof details === 'string' ? details : null,
+            message: typeof (payload as any)?.message === 'string' ? (payload as any).message : null,
+          });
           return;
         }
 
@@ -1592,10 +1722,25 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
         setIsSendingPrompt(false);
         cleanupStream();
         setLlmStatusText(null);
+        markLocalActiveJobFailed(streamingJobIdRef.current ?? activeJobId, {
+          code: typeof (payload as any)?.error === 'string' ? (payload as any).error : null,
+          details: typeof details === 'string' ? details : null,
+          message: typeof (payload as any)?.message === 'string' ? (payload as any).message : null,
+        });
       }
     },
-    [applyFinalPayload, buildHtml, cleanupStream, course.id, parseJsonSafe, syncProgress],
+    [activeJobId, applyFinalPayload, buildHtml, cleanupStream, course.id, markLocalActiveJobFailed, parseJsonSafe, syncProgress],
   );
+
+  const handleStreamEventRef = useRef(handleStreamEvent);
+  useEffect(() => {
+    handleStreamEventRef.current = handleStreamEvent;
+  }, [handleStreamEvent]);
+
+  const parseSseEventRef = useRef(parseSseEvent);
+  useEffect(() => {
+    parseSseEventRef.current = parseSseEvent;
+  }, [parseSseEvent]);
 
   const startHtmlStream = useCallback(
     (jobId: string) => {
@@ -1607,7 +1752,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
       const run = async () => {
         try {
           const response = await fetch(
-            `${apiBaseUrl}/api/v1/html/stream?jobId=${encodeURIComponent(jobId)}`,
+            `${apiBaseUrlRef.current}/api/v1/html/stream?jobId=${encodeURIComponent(jobId)}`,
             {
               method: 'GET',
               signal: controller.signal,
@@ -1636,33 +1781,30 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
             buffer = events.pop() ?? '';
 
             for (const rawEvent of events) {
-              const parsed = parseSseEvent(rawEvent);
-              handleStreamEvent(parsed.event, parsed.data);
+              const parsed = parseSseEventRef.current(rawEvent);
+              handleStreamEventRef.current(parsed.event, parsed.data);
             }
 
             if (done) break;
           }
 
           if (buffer.trim().length > 0) {
-            const parsed = parseSseEvent(buffer);
-            handleStreamEvent(parsed.event, parsed.data);
+            const parsed = parseSseEventRef.current(buffer);
+            handleStreamEventRef.current(parsed.event, parsed.data);
           }
         } catch (error) {
           if (controller.signal.aborted) return;
           console.error('HTML stream error', error);
-          setLlmError('Ошибка при получении потока. Попробуйте снова.');
-          setIsSendingPrompt(false);
-          setLlmStatusText(null);
+          // Stream can be unavailable after refresh (e.g. non-sticky backend instances).
+          // Keep the job running UI and fall back to polling progress status.
+          setLlmError(null);
+          setLlmStatusText((current) => current ?? 'Стрим недоступен. Проверяем статус задачи...');
         } finally {
           if (!controller.signal.aborted) {
-            // If the SSE connection ended unexpectedly (e.g. proxy/server closed the stream),
-            // keep the controller reference and force the stall poller to kick in immediately.
-            // This allows us to recover via `/api/v1/html/result` instead of getting stuck.
             if (streamingJobIdRef.current === jobId) {
-              streamLastEventAtRef.current = Date.now() - 25000;
-              setLlmStatusText((current) => current ?? 'Соединение со стримом закрыто. Проверяем результат...');
-            } else {
+              // Mark stream as inactive so the status poller can take over.
               streamControllerRef.current = null;
+              streamLastEventAtRef.current = 0;
             }
           }
         }
@@ -1670,8 +1812,156 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
 
       void run();
     },
-    [apiBaseUrl, handleStreamEvent, parseSseEvent],
+    [],
   );
+
+  // If SSE isn't available (often after refresh), keep UI alive by polling progress status
+  // and fetch full progress once the job is complete.
+  useEffect(() => {
+    const running = activeJobStatus === 'running' || activeJobStatus === 'queued';
+    if (!isSendingPrompt) return;
+    if (!running) return;
+    if (!isActiveJobForLesson) return;
+    if (!activeJobId) return;
+    if (streamControllerRef.current) return;
+
+    let cancelled = false;
+    let inFlight = false;
+
+    const interval = window.setInterval(() => {
+      if (cancelled || inFlight) return;
+      inFlight = true;
+      void (async () => {
+        try {
+          const statusProgress = await fetchCourseProgressStatus(course.id, { skipCache: true });
+          if (cancelled) return;
+          const active = (statusProgress as any)?.active_job ?? null;
+          const jobId =
+            active && typeof active === 'object'
+              ? (active.jobId ?? active.job_id ?? null)
+              : null;
+          const status =
+            active && typeof active === 'object' && typeof active.status === 'string'
+              ? active.status
+              : null;
+
+          // Job changed or cleared - stop polling.
+          if (!jobId || jobId !== activeJobId) {
+            window.clearInterval(interval);
+            return;
+          }
+
+          if (status && status !== 'running' && status !== 'queued') {
+            const refreshed = await fetchCourseProgress(course.id, { skipCache: true });
+            if (cancelled) return;
+            syncProgress(refreshed ?? {});
+            setIsSendingPrompt(false);
+            setLlmStatusText(null);
+            window.clearInterval(interval);
+          } else {
+            setLlmStatusText((current) => current ?? 'Генерация продолжается...');
+          }
+        } catch (error) {
+          console.error('Failed to poll progress status', error);
+        } finally {
+          inFlight = false;
+        }
+      })();
+    }, 10000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [activeJobId, activeJobStatus, course.id, isActiveJobForLesson, isSendingPrompt, syncProgress]);
+
+  // Prefer polling the in-memory job result (gives partial sections/CSS) to show live progress after refresh.
+  // If the backend instance doesn't have the job (JOB_NOT_FOUND), the progress-status poller above will still work.
+  useEffect(() => {
+    const running = activeJobStatus === 'running' || activeJobStatus === 'queued';
+    if (!isSendingPrompt) return;
+    if (!running) return;
+    if (!isActiveJobForLesson) return;
+    if (!activeJobId) return;
+    if (streamControllerRef.current) return;
+
+    let cancelled = false;
+    let inFlight = false;
+    let intervalId: number | null = null;
+
+    const tick = async () => {
+      if (cancelled || inFlight) return;
+      inFlight = true;
+      try {
+        const result = await apiFetch<any>(`/api/v1/html/result?jobId=${encodeURIComponent(activeJobId)}`);
+        if (cancelled) return;
+        const status = typeof result?.status === 'string' ? result.status : null;
+        if (status === 'done') {
+          applyFinalPayload(result ?? {}, { final: true });
+          setLlmStatusText(null);
+          try {
+            const refreshed = await fetchCourseProgress(course.id, { skipCache: true });
+            if (!cancelled) syncProgress(refreshed ?? {});
+          } catch (progressError) {
+            console.error('Failed to refresh progress after done (poll)', progressError);
+          }
+          setIsSendingPrompt(false);
+          if (intervalId != null) window.clearInterval(intervalId);
+          return;
+        }
+        if (status === 'error') {
+          applyFinalPayload(result ?? {}, { final: true });
+          const errorPayload = result?.error;
+          const code = typeof errorPayload === 'string'
+            ? errorPayload
+            : errorPayload && typeof errorPayload === 'object' && typeof errorPayload.error === 'string'
+              ? errorPayload.error
+              : null;
+          const details = errorPayload && typeof errorPayload === 'object' && typeof errorPayload.details === 'string'
+            ? errorPayload.details
+            : null;
+          const msg = errorPayload && typeof errorPayload === 'object' && typeof errorPayload.message === 'string'
+            ? errorPayload.message
+            : null;
+          markLocalActiveJobFailed(activeJobId, { code, details, message: msg });
+          setIsSendingPrompt(false);
+          setLlmStatusText(null);
+          if (intervalId != null) window.clearInterval(intervalId);
+          return;
+        }
+
+        applyFinalPayload(result ?? {}, { final: false });
+        setLlmStatusText((current) => current ?? 'Генерация продолжается...');
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 404) {
+          // Job isn't available on this instance; let the progress-status poller handle it.
+          if (intervalId != null) window.clearInterval(intervalId);
+          return;
+        }
+        console.error('Failed to poll html result', error);
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    // Call immediately, then every 10s.
+    void tick();
+    intervalId = window.setInterval(() => void tick(), 10000);
+
+    return () => {
+      cancelled = true;
+      if (intervalId != null) window.clearInterval(intervalId);
+    };
+  }, [
+    activeJobId,
+    activeJobStatus,
+    applyFinalPayload,
+    course.id,
+    isActiveJobForLesson,
+    isSendingPrompt,
+    markLocalActiveJobFailed,
+    syncProgress,
+  ]);
 
   // If stream stalls (no events) we fall back to /result polling to avoid infinite "Отправляем...".
   useEffect(() => {
@@ -1769,6 +2059,27 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
 
       if (!response?.jobId) {
         throw new Error('Сервер не вернул идентификатор задачи генерации.');
+      }
+
+      // Optimistic: mark the job as queued immediately so the loader stays visible
+      // even if the SSE connection can't be established (common after refresh).
+      {
+        const now = new Date().toISOString();
+        const next: CourseProgress = {
+          ...(courseProgressRef.current ?? {}),
+          active_job: {
+            jobId: response.jobId,
+            status: 'queued',
+            lessonId: activeLesson.id,
+            courseId: course.id,
+            prompt,
+            startedAt: now,
+            updatedAt: now,
+          } as any,
+        };
+        courseProgressRef.current = next;
+        setCourseProgress(next);
+        onProgressChange?.(course.id, next);
       }
 
       setLlmOutline(response.outline ?? null);
@@ -2009,7 +2320,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
                           </span>
                           <div className="h-1 w-1 rounded-full bg-slate-600"></div>
                           <span className="text-[10px] text-slate-400 font-mono truncate">
-                            v1.0.4
+                            VibeCoderAi v1.0.4
                           </span>
                         </div>
 
@@ -2249,12 +2560,12 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
                   ) : block.blockType === 'list' ? (
                     <div key={block.key} className="not-prose">
                       {block.content && (
-                        <p className="whitespace-pre-line leading-relaxed text-slate-300 mb-3">{block.content}</p>
+                        <p className="whitespace-pre-line leading-relaxed text-slate-300 mb-3">{renderMarkdownBold(block.content)}</p>
                       )}
                       <ul className="list-disc pl-6 space-y-2 text-slate-300">
                         {(block.items ?? []).map((item, itemIdx) => (
                           <li key={itemIdx} className="whitespace-pre-line leading-relaxed">
-                            {item}
+                            {renderMarkdownBold(item)}
                           </li>
                         ))}
                       </ul>
@@ -2269,7 +2580,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
                             {copiedPromptBlock === idx ? 'Скопировано' : 'Скопировать'}
                           </button>
                           <p className="text-xs md:text-sm text-white whitespace-pre-line leading-relaxed">
-                            {block.prompt}
+                            {renderMarkdownBold(block.prompt)}
                           </p>
                         </div>
                       )}
@@ -2293,7 +2604,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
                             <Info className="h-3.5 w-3.5" />
                           </div>
                           <p className="text-[16px] md:text-[17px] text-emerald-50 whitespace-pre-line leading-[1.35] font-medium">
-                            {block.content}
+                            {renderMarkdownBold(block.content)}
                           </p>
                         </div>
                       </div>
@@ -2301,7 +2612,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
                   ) : (
                     <div key={block.key} className="space-y-3">
                       {block.content && (
-                        <p className="whitespace-pre-line leading-relaxed">{block.content}</p>
+                        <p className="whitespace-pre-line leading-relaxed">{renderMarkdownBold(block.content)}</p>
                       )}
                       {block.prompt && (
                         <div className="relative p-4 md:p-5 rounded-xl bg-[#0b1020] border border-vibe-500/30">
@@ -2314,7 +2625,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
                             {copiedPromptBlock === idx ? 'Скопировано' : 'Скопировать'}
                           </button>
                           <p className="text-xs md:text-sm text-white whitespace-pre-line leading-relaxed">
-                            {block.prompt}
+                            {renderMarkdownBold(block.prompt)}
                           </p>
                         </div>
                       )}
