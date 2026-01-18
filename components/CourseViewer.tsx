@@ -1734,12 +1734,8 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
       if (response.quota && typeof response.quota === 'object') {
         setCourseQuota(response.quota);
       }
-      try {
-        const refreshedProgress = await fetchCourseProgress(course.id);
-        syncProgress(refreshedProgress ?? {});
-      } catch (progressError) {
-        console.error('Failed to refresh progress after start', progressError);
-      }
+      // Removed redundant fetchCourseProgress(course.id) here to prevent "running" -> "queued" flicker
+      // which was causing the streaming effect to abort and restart unnecessarily.
       startHtmlStream(response.jobId);
     } catch (error) {
       console.error('Failed to send prompt to LLM', error);
@@ -1775,7 +1771,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
   ]);
 
   useEffect(() => {
-    if (activeJobStatus !== 'running') {
+    if (activeJobStatus !== 'running' && activeJobStatus !== 'queued') {
       streamingJobIdRef.current = null;
       return;
     }
@@ -1932,7 +1928,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
               )}
 
               {/* Enhanced Non-blocking Loading Widget */}
-              {(isSendingPrompt || activeJobStatus === 'running') && (
+              {(isSendingPrompt || activeJobStatus === 'running' || activeJobStatus === 'queued') && (
                 <div className="absolute bottom-6 right-6 z-40 w-80 pointer-events-none">
                   <div className="bg-[#0f172a]/80 backdrop-blur-xl border border-white/10 rounded-2xl p-4 shadow-2xl ring-1 ring-white/5 animate-in fade-in slide-in-from-bottom-4 duration-500 pointer-events-auto">
                     <div className="flex items-start gap-4">
@@ -1971,7 +1967,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
                         <div className="space-y-1.5 mt-3">
                           <div className="flex justify-between items-center text-[10px] font-mono">
                             <span className="text-slate-400 truncate max-w-[180px]">
-                              {llmStatusText || (activeJobStatus === 'running' ? 'Генерация продолжается...' : 'Инициализация...')}
+                              {llmStatusText || (activeJobStatus === 'running' ? 'Генерация...' : activeJobStatus === 'queued' ? 'В очереди...' : 'Инициализация...')}
                             </span>
                             <span className="text-vibe-400 animate-pulse">Running</span>
                           </div>
