@@ -3,19 +3,23 @@ import type { CourseProgress, LessonStatus } from '../types';
 
 // In-flight deduplication
 const inFlightCourseProgress = new Map<string, Promise<CourseProgress>>();
+const inFlightCourseProgressStatus = new Map<string, Promise<CourseProgress>>();
 const inFlightCoursesProgress = new Map<string, Promise<Record<string, CourseProgress>>>();
 
 // Short-term cache to avoid redundant requests (5 second TTL)
 const PROGRESS_CACHE_TTL_MS = 5000;
 const progressCache = new Map<string, { expiresAt: number; value: CourseProgress }>();
+const progressStatusCache = new Map<string, { expiresAt: number; value: CourseProgress }>();
 
 const coursesProgressCache = new Map<string, { expiresAt: number; value: Record<string, CourseProgress> }>();
 
 export function invalidateProgressCache(courseId?: string): void {
   if (courseId) {
     progressCache.delete(String(courseId));
+    progressStatusCache.delete(String(courseId));
   } else {
     progressCache.clear();
+    progressStatusCache.clear();
   }
   coursesProgressCache.clear();
 }
@@ -84,6 +88,47 @@ export async function fetchCourseProgress(
   } finally {
     if (inFlightCourseProgress.get(key) === promise) {
       inFlightCourseProgress.delete(key);
+    }
+  }
+}
+
+export async function fetchCourseProgressStatus(
+  courseId: string,
+  opts?: { skipCache?: boolean },
+): Promise<CourseProgress> {
+  const key = String(courseId);
+
+  if (!opts?.skipCache) {
+    const cached = progressStatusCache.get(key);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.value;
+    }
+  }
+
+  const existing = inFlightCourseProgressStatus.get(key);
+  if (existing) return existing;
+
+  const promise = (async () => {
+    const response = await apiFetch<ProgressEnvelope | CourseProgress | null>(
+      `/api/courses/${key}/progress?onlyStatus=true`,
+    );
+    const result = normalizeCourseProgress(response);
+
+    progressStatusCache.set(key, {
+      expiresAt: Date.now() + PROGRESS_CACHE_TTL_MS,
+      value: result,
+    });
+
+    return result;
+  })();
+
+  inFlightCourseProgressStatus.set(key, promise);
+
+  try {
+    return await promise;
+  } finally {
+    if (inFlightCourseProgressStatus.get(key) === promise) {
+      inFlightCourseProgressStatus.delete(key);
     }
   }
 }

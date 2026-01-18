@@ -3,7 +3,7 @@ import { Course, CourseProgress, LessonType } from '../types';
 import { ImageAnalyzer } from './ImageAnalyzer';
 import { ImageEditor } from './ImageEditor';
 import { FileText, Menu, X, ChevronLeft, ChevronRight, ChevronDown, Send, Info } from 'lucide-react';
-import { fetchCourseProgress, fetchCourseResume, patchCourseProgress } from '../services/progressApi';
+import { fetchCourseProgress, fetchCourseProgressStatus, fetchCourseResume, patchCourseProgress } from '../services/progressApi';
 import { ApiError, apiFetch } from '../services/apiClient';
 import { fetchCourseQuota, type CourseQuota } from '../services/courseQuotaApi';
 import { fetchLessonContent, getCachedLessonContent } from '../services/lessonsApi';
@@ -594,13 +594,31 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
 
     // If we already have initialProgress with a resume point, we've already set the index.
     // We still want to fetch the absolute latest, but without showing a full loader if we have data.
-    const hasInitialData = !!initialProgress?.resume_lesson_id;
+    const hasInitialData = Boolean(initialProgress?.resume_lesson_id || initialProgress?.last_viewed_lesson_id);
     if (!hasInitialData) {
       setProgressLoading(true);
     }
 
     (async () => {
       try {
+        const activeJobIsRunning = activeJobStatus === 'running' || activeJobStatus === 'queued';
+
+        // While an HTML job is running, course progress can include a large workspace payload.
+        // After a page refresh this can timeout through the dev proxy and break stream resume.
+        // In that case, fetch only `active_job` and keep the rest from initialProgress.
+        if (hasInitialData && activeJobIsRunning) {
+          const statusProgress = await fetchCourseProgressStatus(course.id);
+          if (cancelled) return;
+
+          const statusActiveJob = (statusProgress as any)?.active_job ?? null;
+          setCourseProgress((prev) => {
+            const next = { ...(prev ?? {}), active_job: statusActiveJob };
+            onProgressChange?.(course.id, next);
+            return next;
+          });
+          return;
+        }
+
         const progressData = await fetchCourseProgress(course.id);
 
         if (cancelled) return;
@@ -624,7 +642,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [course.id, lessonIdsKey, syncProgress]);
+  }, [activeJobStatus, course.id, lessonIdsKey, onProgressChange, syncProgress]);
 
   useEffect(() => {
     let cancelled = false;
