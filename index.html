@@ -45,8 +45,13 @@
             animation: {
               'blob': 'blob 7s infinite',
               'float': 'float 6s ease-in-out infinite',
+              'progress-glow': 'progress-glow 2s linear infinite',
             },
             keyframes: {
+              'progress-glow': {
+                '0%': { backgroundPosition: '200% 0' },
+                '100%': { backgroundPosition: '-200% 0' },
+              },
               blob: {
                 '0%': { transform: 'translate(0px, 0px) scale(1)' },
                 '33%': { transform: 'translate(30px, -50px) scale(1.1)' },
