@@ -177,6 +177,8 @@ function describeApiError(error: unknown, fallback: string): string {
   return fallback;
 }
 
+const GENERIC_RELOAD_ERROR = 'Произошла ошибка. Попробуйте перезагрузить страницу';
+
 function getLessonMode(lesson: any): 'edit' | 'add_page' | 'create' {
   const rawSettings = lesson?.settings;
   let settings: any = rawSettings;
@@ -323,9 +325,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
         if (cancelled) return;
         if (!cached) {
           setActiveLessonContent(null);
-          setActiveLessonContentError(
-            describeApiError(err, 'Не удалось загрузить контент урока. Попробуйте обновить страницу.'),
-          );
+          setActiveLessonContentError(describeApiError(err, GENERIC_RELOAD_ERROR));
         }
       })
       .finally(() => {
@@ -1455,7 +1455,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
         syncProgress(nextProgress ?? {});
       } catch (error) {
         console.error('Failed to update active file', error);
-        setLlmError(describeApiError(error, 'Не удалось переключить страницу. Попробуйте ещё раз.'));
+        setLlmError(describeApiError(error, GENERIC_RELOAD_ERROR));
       }
     },
     [course.id, previewWorkspace.files, syncProgress, uiActiveFile],
@@ -2085,7 +2085,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
       return;
     }
     if (quotaRequired && (courseQuotaLoading || !courseQuota)) {
-      setLlmError(courseQuotaError || 'Не удалось проверить лимит запросов. Перезагрузите страницу и попробуйте ещё раз.');
+      setLlmError(courseQuotaError || GENERIC_RELOAD_ERROR);
       return;
     }
     if (courseQuota?.limit != null && courseQuota.remaining === 0) {
@@ -2171,7 +2171,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
       startHtmlStream(response.jobId);
     } catch (error) {
       console.error('Failed to send prompt to LLM', error);
-      let message = describeApiError(error, 'Ошибка при запросе LLM. Попробуйте ещё раз.');
+      let message = describeApiError(error, GENERIC_RELOAD_ERROR);
       if (error instanceof ApiError && error.status === 502) {
         const code = (error.body as any)?.error;
         if (code === 'LLM_PLAN_NO_SECTIONS') {
@@ -2257,7 +2257,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
         }
       } catch (error) {
         console.error('Failed to fetch html result', error);
-        setLlmError('Не удалось загрузить результат генерации. Попробуйте ещё раз.');
+        setLlmError(GENERIC_RELOAD_ERROR);
         setIsSendingPrompt(false);
       }
     };
