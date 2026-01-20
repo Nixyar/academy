@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Course, CourseProgress, LessonType } from '../types';
 import { ImageAnalyzer } from './ImageAnalyzer';
 import { ImageEditor } from './ImageEditor';
-import { FileText, Menu, X, ChevronLeft, ChevronRight, ChevronDown, Send, Info } from 'lucide-react';
+import { FileText, Menu, X, ChevronLeft, ChevronRight, ChevronDown, Send, Info, Lightbulb } from 'lucide-react';
 import { fetchCourseProgress, fetchCourseProgressStatus, fetchCourseResume, patchCourseProgress } from '../services/progressApi';
 import { ApiError, apiFetch } from '../services/apiClient';
 import { fetchCourseQuota, type CourseQuota } from '../services/courseQuotaApi';
@@ -217,12 +217,15 @@ const getValueByPath = (source: unknown, path: string): unknown => {
   return path.split('.').reduce((acc: any, key) => (acc && typeof acc === 'object' ? acc[key] : undefined), source);
 };
 
-const renderMarkdownBold = (text: string): React.ReactNode => {
+const renderMarkdown = (text: string): React.ReactNode => {
   const input = String(text ?? '');
-  if (!input.includes('**')) return input;
+  if (!input.includes('**') && !input.includes('*') && !input.includes('`')) return input;
 
   const parts: React.ReactNode[] = [];
-  const re = /\*\*([\s\S]+?)\*\*/g;
+  // Updated regex to handle bold (**), italic (*), and code (`)
+  // We use a priority-based approach or a combined regex. 
+  // Combined regex approach:
+  const re = /(\*\*[\s\S]+?\*\*|\*[\s\S]+?\*|`[\s\S]+?`)/g;
   let lastIndex = 0;
   let match: RegExpExecArray | null;
   let key = 0;
@@ -232,7 +235,23 @@ const renderMarkdownBold = (text: string): React.ReactNode => {
     const end = start + match[0].length;
     const before = input.slice(lastIndex, start);
     if (before) parts.push(before);
-    parts.push(<strong key={`b-${key}`} className="font-semibold">{match[1]}</strong>);
+
+    const token = match[0];
+    if (token.startsWith('**') && token.endsWith('**')) {
+      const inner = token.slice(2, -2);
+      parts.push(<strong key={`b-${key}`} className="font-semibold">{renderMarkdown(inner)}</strong>);
+    } else if (token.startsWith('*') && token.endsWith('*')) {
+      const inner = token.slice(1, -1);
+      parts.push(<em key={`i-${key}`} className="italic">{renderMarkdown(inner)}</em>);
+    } else if (token.startsWith('`') && token.endsWith('`')) {
+      const inner = token.slice(1, -1);
+      parts.push(
+        <code key={`c-${key}`} className="px-1.5 py-0.5 rounded bg-white/10 font-mono text-[0.9em] border border-white/5 text-vibe-300">
+          {inner}
+        </code>
+      );
+    }
+
     key += 1;
     lastIndex = end;
   }
@@ -1596,9 +1615,9 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
             ? (typeof (payload as any).error.message === 'string'
               ? (payload as any).error.message
               : (typeof (payload as any).error.error === 'string' ? (payload as any).error.error : null))
-          : typeof payload?.message === 'string'
-            ? payload.message
-            : null;
+            : typeof payload?.message === 'string'
+              ? payload.message
+              : null;
       const errorDetailsRaw =
         payload?.error && typeof payload.error === 'object'
           ? ((payload as any).error.details ?? (payload as any).error.error_details ?? null)
@@ -2289,6 +2308,14 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     prompt: string;
     blockType: string | null;
     items?: string[] | null;
+    title?: string | null;
+    leftTitle?: string | null;
+    leftContent?: string | null;
+    rightTitle?: string | null;
+    rightContent?: string | null;
+    action?: string | null;
+    description?: string | null;
+    rows?: any[] | null;
   };
 
   const blockItems = useMemo<LessonBlockItem[]>(() => {
@@ -2340,6 +2367,52 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
         if (blockType === 'list') {
           if (!items || items.length === 0) return null;
           return { key, content, prompt, blockType, items };
+        }
+
+        if (blockType === 'comparison') {
+          return {
+            key,
+            content: '',
+            prompt: '',
+            blockType,
+            title: (block as any).title,
+            leftTitle: (block as any).leftTitle,
+            leftContent: (block as any).leftContent,
+            rightTitle: (block as any).rightTitle,
+            rightContent: (block as any).rightContent,
+          };
+        }
+
+        if (blockType === 'practice_step') {
+          return {
+            key,
+            content,
+            prompt,
+            blockType,
+            action: (block as any).action,
+          };
+        }
+
+        if (blockType === 'reflection_task') {
+          return {
+            key,
+            content,
+            prompt: '',
+            blockType,
+            title: (block as any).title,
+          };
+        }
+
+        if (blockType === 'interactive_table') {
+          return {
+            key,
+            content: '',
+            prompt: '',
+            blockType,
+            title: (block as any).title,
+            description: (block as any).description,
+            rows: Array.isArray((block as any).rows) ? (block as any).rows : [],
+          };
         }
 
         if (!content && !prompt) return null;
@@ -2637,12 +2710,12 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
                   ) : block.blockType === 'list' ? (
                     <div key={block.key} className="not-prose">
                       {block.content && (
-                        <p className="whitespace-pre-line leading-relaxed text-slate-300 mb-3">{renderMarkdownBold(block.content)}</p>
+                        <p className="whitespace-pre-line leading-relaxed text-slate-300 mb-3">{renderMarkdown(block.content)}</p>
                       )}
                       <ul className="list-disc pl-6 space-y-2 text-slate-300">
                         {(block.items ?? []).map((item, itemIdx) => (
                           <li key={itemIdx} className="whitespace-pre-line leading-relaxed">
-                            {renderMarkdownBold(item)}
+                            {renderMarkdown(item)}
                           </li>
                         ))}
                       </ul>
@@ -2657,7 +2730,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
                             {copiedPromptBlock === idx ? 'Скопировано' : 'Скопировать'}
                           </button>
                           <p className="text-xs md:text-sm text-white whitespace-pre-line leading-relaxed">
-                            {renderMarkdownBold(block.prompt)}
+                            {renderMarkdown(block.prompt)}
                           </p>
                         </div>
                       )}
@@ -2681,15 +2754,147 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
                             <Info className="h-3.5 w-3.5" />
                           </div>
                           <p className="text-[16px] md:text-[17px] text-emerald-50 whitespace-pre-line leading-[1.35] font-medium">
-                            {renderMarkdownBold(block.content)}
+                            {renderMarkdown(block.content)}
                           </p>
+                        </div>
+                      </div>
+                    </div>
+                  ) : block.blockType === 'comparison' ? (
+                    <div key={block.key} className="not-prose space-y-4 my-10">
+                      {block.title && (
+                        <div className="space-y-1 mb-6">
+                          <p className="text-[10px] uppercase tracking-[0.2em] text-vibe-400 font-bold">Сравнительный анализ</p>
+                          <h3 className="text-2xl font-bold text-white font-display tracking-tight">{block.title}</h3>
+                        </div>
+                      )}
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+                        <div className="flex flex-col bg-[#0b1020]/50 border border-white/5 rounded-2xl overflow-hidden backdrop-blur-sm">
+                          {block.leftTitle && (
+                            <div className="px-4 py-2.5 border-b border-white/5 bg-white/5 flex items-center justify-between">
+                              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                                {block.leftTitle}
+                              </span>
+                              <div className="w-1.5 h-1.5 rounded-full bg-slate-500/50"></div>
+                            </div>
+                          )}
+                          <div className="p-5 flex-1">
+                            <div className="text-sm text-slate-400 whitespace-pre-line leading-relaxed">
+                              {renderMarkdown(block.leftContent ?? '')}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-col bg-[#0c1a22]/40 border border-emerald-500/20 rounded-2xl overflow-hidden relative backdrop-blur-sm group">
+                          <div className="absolute inset-0 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-700 bg-[radial-gradient(circle_at_50%_0%,rgba(16,185,129,0.1),transparent_70%)]"></div>
+                          {block.rightTitle && (
+                            <div className="px-4 py-2.5 border-b border-emerald-500/20 bg-emerald-500/10 flex items-center justify-between">
+                              <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400">
+                                {block.rightTitle}
+                              </span>
+                              <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.5)]"></div>
+                            </div>
+                          )}
+                          <div className="p-5 flex-1">
+                            <div className="text-sm text-emerald-50/90 whitespace-pre-line leading-relaxed">
+                              {renderMarkdown(block.rightContent ?? '')}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ) : block.blockType === 'practice_step' ? (
+                    <div key={block.key} className="not-prose space-y-4 my-8 p-6 rounded-2xl bg-[#080c14] border border-vibe-500/20 shadow-xl shadow-black/40 relative overflow-hidden group">
+                      {/* Decorative background element */}
+                      <div className="absolute top-0 right-0 w-32 h-32 bg-vibe-500/5 blur-3xl rounded-full -mr-16 -mt-16 group-hover:bg-vibe-500/10 transition-colors duration-700"></div>
+
+                      <div className="flex items-center justify-between relative z-10">
+                        <div className="flex items-center gap-3">
+                          <div className="w-8 h-8 rounded-lg bg-vibe-500/20 flex items-center justify-center border border-vibe-500/30">
+                            <Send className="w-4 h-4 text-vibe-400" />
+                          </div>
+                          <div>
+                            <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-vibe-400 block">Практическое задание</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {block.content && (
+                        <div className="text-slate-300 text-sm md:text-base leading-relaxed relative z-10">
+                          {renderMarkdown(block.content)}
+                        </div>
+                      )}
+
+                      {block.prompt && (
+                        <div className="relative mt-4 p-4 md:p-5 rounded-xl bg-black/40 border border-white/5 backdrop-blur-sm group/prompt">
+                          <button
+                            type="button"
+                            onClick={() => handleCopyPrompt(block.prompt, idx)}
+                            className="absolute -top-3 right-4 text-[9px] md:text-[10px] uppercase tracking-wide px-2.5 py-1.5 rounded-md border border-white/10 text-slate-300 bg-[#0f172a] hover:bg-white/5 hover:border-vibe-400/40 hover:text-white transition-all shadow-lg"
+                            style={{ cursor: 'pointer' }}
+                          >
+                            {copiedPromptBlock === idx ? 'Скопировано' : 'Скопировать промпт'}
+                          </button>
+                          <p className="text-xs md:text-sm text-slate-200 font-mono whitespace-pre-line leading-relaxed">
+                            {renderMarkdown(block.prompt)}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  ) : block.blockType === 'reflection_task' ? (
+                    <div key={block.key} className="not-prose space-y-4 my-8 p-6 rounded-2xl bg-indigo-500/5 border border-indigo-500/20 shadow-xl shadow-indigo-900/10 relative overflow-hidden group">
+                      <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-500/10 blur-3xl rounded-full -mr-16 -mt-16 group-hover:bg-indigo-500/20 transition-colors duration-700"></div>
+
+                      <div className="flex items-center gap-3 relative z-10">
+                        <div className="w-8 h-8 rounded-lg bg-indigo-500/20 flex items-center justify-center border border-indigo-500/30">
+                          <Lightbulb className="w-4 h-4 text-indigo-400" />
+                        </div>
+                        <h4 className="text-lg font-bold text-white font-display tracking-tight">{block.title ?? 'Задание на размышление'}</h4>
+                      </div>
+
+                      {block.content && (
+                        <div className="text-slate-300 text-[16px] leading-relaxed relative z-10 ml-1">
+                          {renderMarkdown(block.content)}
+                        </div>
+                      )}
+                    </div>
+                  ) : block.blockType === 'interactive_table' ? (
+                    <div key={block.key} className="not-prose space-y-5 my-10">
+                      <div className="space-y-1">
+                        {block.title && <h3 className="text-2xl font-bold text-white font-display tracking-tight">{block.title}</h3>}
+                        {block.description && <p className="text-sm text-slate-400">{block.description}</p>}
+                      </div>
+
+                      <div className="relative overflow-hidden rounded-2xl border border-white/5 bg-[#080c14] shadow-2xl">
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-left border-collapse">
+                            <thead>
+                              <tr className="border-b border-white/5 bg-white/5">
+                                <th className="px-5 py-4 text-[11px] font-bold uppercase tracking-wider text-slate-400 border-r border-white/5">Элемент</th>
+                                <th className="px-5 py-4 text-[11px] font-bold uppercase tracking-wider text-slate-400 border-r border-white/5">Вопросы</th>
+                                <th className="px-5 py-4 text-[11px] font-bold uppercase tracking-wider text-slate-400">Пример</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {(block.rows ?? []).map((row: any, rIdx: number) => (
+                                <tr key={rIdx} className="border-b last:border-0 border-white/5 hover:bg-white/[0.02] transition-colors">
+                                  <td className="px-5 py-4 text-sm font-bold text-vibe-400 border-r border-white/5 bg-vibe-500/5">{row.element}</td>
+                                  <td className="px-5 py-4 text-sm text-slate-300 border-r border-white/5 leading-relaxed">{row.questions}</td>
+                                  <td className="px-5 py-4 text-sm text-slate-400 font-italic leading-relaxed">
+                                    <div className="pl-3 border-l-2 border-slate-700 italic">
+                                      {row.example}
+                                    </div>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
                         </div>
                       </div>
                     </div>
                   ) : (
                     <div key={block.key} className="space-y-3">
                       {block.content && (
-                        <p className="whitespace-pre-line leading-relaxed">{renderMarkdownBold(block.content)}</p>
+                        <p className="whitespace-pre-line leading-relaxed">{renderMarkdown(block.content)}</p>
                       )}
                       {block.prompt && (
                         <div className="relative p-4 md:p-5 rounded-xl bg-[#0b1020] border border-vibe-500/30">
@@ -2702,7 +2907,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
                             {copiedPromptBlock === idx ? 'Скопировано' : 'Скопировать'}
                           </button>
                           <p className="text-xs md:text-sm text-white whitespace-pre-line leading-relaxed">
-                            {renderMarkdownBold(block.prompt)}
+                            {renderMarkdown(block.prompt)}
                           </p>
                         </div>
                       )}
