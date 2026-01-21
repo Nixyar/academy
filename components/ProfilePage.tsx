@@ -58,12 +58,11 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, courses, progres
   const notStartedCourses = courses.filter((course) => !getCourseProgressState(course.id).started);
   const showContinueSection = Boolean(progressLoaded) && startedCourses.length > 0;
 
-  const canAccessCourse = (course: Course, isStarted: boolean) => {
-    if (isStarted) return true;
+  const canAccessCourse = (course: Course) => {
     const accessLower = (course.access ?? '').toLowerCase();
     const price = typeof course.price === 'number' ? course.price : 0;
     const requiresPurchase = accessLower === 'paid' || accessLower === 'purchase' || accessLower === 'buy' || price > 0;
-    return requiresPurchase ? purchasedCourseIds.has(course.id) : true;
+    return requiresPurchase ? (Boolean(course.isPurchased) || purchasedCourseIds.has(course.id)) : true;
   };
 
   // Calculate mock stats
@@ -199,7 +198,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, courses, progres
                 const percent = totalLessons > 0 ? Math.round((completedLessons / totalLessons) * 100) : 0;
                 const isDraft = (course.status ?? '').toLowerCase() === 'draft';
                 const labels = getCourseLabels(course);
-                const canAccess = canAccessCourse(course, isStarted);
+                const canAccess = canAccessCourse(course);
 
                 return (
                   <div key={course.id} className="group bg-glass border border-white/5 rounded-2xl overflow-hidden hover:border-vibe-500/30 transition-all hover:-translate-y-1 hover:shadow-2xl hover:shadow-vibe-900/10">
@@ -286,7 +285,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, courses, progres
               {notStartedCourses.map(course => {
                 const isDraft = (course.status ?? '').toLowerCase() === 'draft';
                 const labels = getCourseLabels(course);
-                const canAccess = canAccessCourse(course, false);
+                const canAccess = canAccessCourse(course);
 
                 return (
                   <div key={course.id} className="group bg-glass border border-white/5 rounded-2xl overflow-hidden hover:border-vibe-500/30 transition-all hover:-translate-y-1 hover:shadow-2xl hover:shadow-vibe-900/10">
