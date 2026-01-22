@@ -26,11 +26,46 @@
       "course": { "name": "Основы Vibe Coding", "url": "/courses/vibe-basics" }
     },
     {
-      "path": "/courses/prompt-developer",
-      "title": "Prompt-Developer — курс по prompt engineering | VibeCoderAI",
-      "description": "Промпт-инжиниринг под прод: структура, итерации и проверка — чтобы идеи превращались в рабочие продукты.",
+      "path": "/courses/ai-navigator",
+      "title": "AI-Навигатор: Управляй результатом | VibeCoderAI",
+      "description": "Научитесь управлять AI в любой задаче: от поста в Instagram до анализа конкурентов",
       "type": "course",
-      "course": { "name": "Prompt-Developer", "url": "/courses/prompt-developer" }
+      "course": { "name": "AI-Навигатор: Управляй результатом", "url": "/courses/ai-navigator" }
+    },
+    {
+      "path": "/courses/ai-navigator",
+      "title": "AI-Навигатор: Управляй результатом | VibeCoderAI",
+      "description": "Научитесь управлять AI в любой задаче: от поста в Instagram до анализа конкурентов",
+      "type": "course",
+      "course": { "name": "AI-Навигатор: Управляй результатом", "url": "/courses/ai-navigator" }
+    },
+    {
+      "path": "/courses/vibecoder-developer",
+      "title": "Vibecoder Developer | VibeCoderAI",
+      "description": "Курс для тех, кто хочет создавать сайты и веб-приложения с помощью AI, а не просто «играться с промптами».",
+      "type": "course",
+      "course": { "name": "Vibecoder Developer", "url": "/courses/vibecoder-developer" }
+    },
+    {
+      "path": "/courses/automator-ai",
+      "title": "Автоматизация процессов | VibeCoderAI",
+      "description": "Один раз настроил — дальше работает",
+      "type": "course",
+      "course": { "name": "Автоматизация процессов", "url": "/courses/automator-ai" }
+    },
+    {
+      "path": "/courses/seo-ai",
+      "title": "SEO-Hacker | VibeCoderAI",
+      "description": "Рост сайтов из поиска — с помощью AI",
+      "type": "course",
+      "course": { "name": "SEO-Hacker", "url": "/courses/seo-ai" }
+    },
+    {
+      "path": "/courses/ai-blog",
+      "title": "Писать легко. Расти стабильно | VibeCoderAI",
+      "description": "AI для блога и контента",
+      "type": "course",
+      "course": { "name": "Писать легко. Расти стабильно", "url": "/courses/ai-blog" }
     },
     {
       "path": "/profile",

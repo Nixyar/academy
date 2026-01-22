@@ -7,6 +7,7 @@
     "start": "vite",
     "build": "vite build && node scripts/generate-sitemap.mjs",
     "build:prerender": "PRERENDER=1 vite build && node scripts/generate-sitemap.mjs",
+    "postinstall": "node scripts/patch-prerenderer-host.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

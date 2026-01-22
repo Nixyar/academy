@@ -71,6 +71,7 @@ export default defineConfig(({ mode }) => {
               },
               renderer: new SafePuppeteerRenderer({
                 executablePath: resolveChromeExecutablePath(),
+                maxConcurrentRoutes: 1,
                 renderAfterDocumentEvent: 'prerender-ready',
                 ...(process.platform === 'linux'
                   ? { args: ['--no-sandbox', '--disable-setuid-sandbox'] }
