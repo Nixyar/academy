@@ -9,75 +9,70 @@
     {
       "path": "/",
       "title": "VibeCoderAI — академия вайб-кодинга и промптинга",
-      "description": "VibeCoderAI — обучение Vibe Coding и prompt engineering: создавай цифровые продукты с помощью AI быстрее и увереннее.",
+      "description": "VibeCoderAI — обучение Vibe Coding и prompt engineering: создавай цифровые продукты и решения через AI быстрее и увереннее.",
       "type": "home"
     },
     {
       "path": "/courses/",
-      "title": "Курсы по AI и промптингу | VibeCoderAI",
-      "description": "Каталог курсов VibeCoderAI: обучение работе с AI, вайб-кодингу и созданию цифровых продуктов.",
+      "title": "Курсы | VibeCoderAI",
+      "description": "Каталог курсов VibeCoderAI: бесплатные и PRO-программы по AI-навыкам, промптингу, автоматизации и созданию цифровых продуктов.",
       "type": "courses_index"
     },
 
     {
       "path": "/courses/vibe-basics/",
       "title": "Основы Vibe Coding — бесплатный курс | VibeCoderAI",
-      "description": "Быстрый старт: как собирать лендинги и веб-приложения с AI.",
+      "description": "Быстрый старт: как собирать лендинги и веб-приложения с AI, без фреймворк-боли и рутины.",
       "type": "course",
-      "noindex": true,
-      "prerender": false,
       "course": { "name": "Основы Vibe Coding", "url": "/courses/vibe-basics/" }
+    },
+    {
+      "path": "/courses/prompt-developer/",
+      "title": "Prompt-Developer | VibeCoderAI",
+      "description": "Путь от идеи до готового сайта — без кода и конструкторов. Учись делать результат через правильные промпты.",
+      "type": "course",
+      "course": { "name": "Prompt-Developer", "url": "/courses/prompt-developer/" }
     },
     {
       "path": "/courses/ai-navigator/",
       "title": "AI-Навигатор: Управляй результатом | VibeCoderAI",
-      "description": "Как управлять AI в любой задаче.",
+      "description": "Научись управлять AI в любой задаче: от контента и анализа до принятия решений и упаковки идей.",
       "type": "course",
-      "noindex": true,
-      "prerender": false,
-      "course": { "name": "AI-Навигатор: Управляй результатом", "url": "/courses/ai-navigator/" }
+      "course": { "name": "AI-Навигатор", "url": "/courses/ai-navigator/" }
     },
     {
       "path": "/courses/vibecoder-developer/",
       "title": "Vibecoder Developer | VibeCoderAI",
-      "description": "Создание сайтов и веб-приложений с помощью AI.",
+      "description": "Курс для тех, кто хочет создавать сайты и веб-приложения с помощью AI, а не просто «играться с промптами».",
       "type": "course",
-      "noindex": true,
-      "prerender": false,
       "course": { "name": "Vibecoder Developer", "url": "/courses/vibecoder-developer/" }
     },
     {
       "path": "/courses/automator-ai/",
       "title": "Автоматизация процессов | VibeCoderAI",
-      "description": "Один раз настроил — дальше работает.",
+      "description": "Один раз настроил — дальше работает. Автоматизация задач и процессов с помощью AI.",
       "type": "course",
-      "noindex": true,
-      "prerender": false,
       "course": { "name": "Автоматизация процессов", "url": "/courses/automator-ai/" }
     },
     {
       "path": "/courses/seo-ai/",
-      "title": "SEO + AI | VibeCoderAI",
-      "description": "Рост сайтов из поиска с помощью AI.",
+      "title": "SEO-Hacker | VibeCoderAI",
+      "description": "Рост из поиска с помощью AI: структура, контент, техническая база и масштабирование.",
       "type": "course",
-      "noindex": true,
-      "prerender": false,
-      "course": { "name": "SEO + AI", "url": "/courses/seo-ai/" }
+      "course": { "name": "SEO-Hacker", "url": "/courses/seo-ai/" }
     },
     {
       "path": "/courses/ai-blog/",
-      "title": "AI для блога и контента | VibeCoderAI",
-      "description": "Создание и рост контента с помощью AI.",
+      "title": "Писать легко. Расти стабильно | VibeCoderAI",
+      "description": "AI для блога и контента: идеи, тексты, рубрики, упаковка и стабильный рост.",
       "type": "course",
-      "noindex": true,
-      "prerender": false,
-      "course": { "name": "AI для блога", "url": "/courses/ai-blog/" }
+      "course": { "name": "AI для контента", "url": "/courses/ai-blog/" }
     },
 
     {
-      "path": "/profile",
+      "path": "/profile/",
       "title": "Профиль | VibeCoderAI",
-      "description": "Личный кабинет пользователя.",
+      "description": "Личный кабинет VibeCoderAI.",
       "type": "private",
       "noindex": true,
       "prerender": false
