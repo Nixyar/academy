@@ -2,11 +2,12 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Course, CourseProgress, LessonType } from '../types';
 import { ImageAnalyzer } from './ImageAnalyzer';
 import { ImageEditor } from './ImageEditor';
-import { FileText, Menu, X, ChevronLeft, ChevronRight, ChevronDown, Send, Info, Lightbulb } from 'lucide-react';
+import { FileText, Menu, X, ChevronLeft, ChevronRight, ChevronDown, Send, Info, Lightbulb, Star } from 'lucide-react';
 import { fetchCourseProgress, fetchCourseProgressStatus, fetchCourseResume, patchCourseProgress } from '../services/progressApi';
 import { ApiError, apiFetch } from '../services/apiClient';
 import { fetchCourseQuota, type CourseQuota } from '../services/courseQuotaApi';
 import { fetchLessonContent, getCachedLessonContent } from '../services/lessonsApi';
+import { supabase } from '../services/supabaseClient';
 
 const IFRAME_BASE_STYLES = `
   :root { color-scheme: dark; }
@@ -308,6 +309,12 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
   const [progressLoading, setProgressLoading] = useState(false);
   const [promptInput, setPromptInput] = useState('');
   const [isSendingPrompt, setIsSendingPrompt] = useState(false);
+  const [feedbackRating, setFeedbackRating] = useState(0);
+  const [feedbackComment, setFeedbackComment] = useState('');
+  const [feedbackSubmitted, setFeedbackSubmitted] = useState(false);
+  const [feedbackLoading, setFeedbackLoading] = useState(false);
+  const [feedbackError, setFeedbackError] = useState<string | null>(null);
+  const [feedbackSavedAt, setFeedbackSavedAt] = useState<string | null>(null);
   const [courseQuota, setCourseQuota] = useState<CourseQuota | null>(null);
   const [courseQuotaLoading, setCourseQuotaLoading] = useState(false);
   const [courseQuotaError, setCourseQuotaError] = useState<string | null>(null);
@@ -326,6 +333,101 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
   const streamingJobIdRef = useRef<string | null>(null);
   const streamLastEventAtRef = useRef<number>(0);
   const canPersistPromptRef = useRef(true);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    setFeedbackError(null);
+    setFeedbackLoading(false);
+    setFeedbackRating(0);
+    setFeedbackComment('');
+    setFeedbackSubmitted(false);
+    setFeedbackSavedAt(null);
+
+    async function loadExistingFeedback() {
+      if (!supabase) return;
+      setFeedbackLoading(true);
+
+      try {
+        const { data: userData, error: userError } = await supabase.auth.getUser();
+        if (userError) throw userError;
+        const userId = userData.user?.id;
+        if (!userId) return;
+
+        const { data, error } = await supabase
+          .from('course_feedback')
+          .select('rating,comment,updated_at')
+          .eq('course_id', course.id)
+          .eq('user_id', userId)
+          .maybeSingle();
+
+        if (error) throw error;
+        if (!data || cancelled) return;
+
+        setFeedbackRating(typeof (data as any).rating === 'number' ? (data as any).rating : 0);
+        setFeedbackComment(typeof (data as any).comment === 'string' ? (data as any).comment : '');
+        setFeedbackSubmitted(true);
+        setFeedbackSavedAt(typeof (data as any).updated_at === 'string' ? (data as any).updated_at : null);
+      } catch (err) {
+        if (cancelled) return;
+        console.warn('Failed to load course feedback', err);
+        setFeedbackError('Не удалось загрузить ваш отзыв. Попробуйте позже.');
+      } finally {
+        if (cancelled) return;
+        setFeedbackLoading(false);
+      }
+    }
+
+    void loadExistingFeedback();
+    return () => {
+      cancelled = true;
+    };
+  }, [course.id]);
+
+  const handleSubmitFeedback = useCallback(async () => {
+    if (feedbackRating <= 0) return;
+    setFeedbackError(null);
+
+    if (!supabase) {
+      setFeedbackError('Не настроены переменные окружения Supabase (VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY).');
+      return;
+    }
+
+    setFeedbackLoading(true);
+    try {
+      const { data: userData, error: userError } = await supabase.auth.getUser();
+      if (userError) throw userError;
+      const user = userData.user;
+      if (!user) {
+        setFeedbackError('Нужно войти через Supabase, чтобы оставить отзыв.');
+        return;
+      }
+
+      const course_id = course.id;
+      const rating = feedbackRating;
+      const comment = feedbackComment.trim();
+
+      const { data, error } = await supabase
+        .from('course_feedback')
+        .upsert(
+          { course_id, user_id: user.id, rating, comment, metadata: { page: 'course_end' } },
+          { onConflict: 'user_id,course_id' },
+        )
+        .select('updated_at')
+        .maybeSingle();
+
+      if (error) throw error;
+
+      setFeedbackSubmitted(true);
+      setFeedbackSavedAt(typeof (data as any)?.updated_at === 'string' ? (data as any).updated_at : new Date().toISOString());
+    } catch (err: any) {
+      console.error('Failed to submit course feedback', err);
+      const message = typeof err?.message === 'string' && err.message.trim() ? err.message : 'Не удалось отправить отзыв.';
+      setFeedbackError(message);
+    } finally {
+      setFeedbackLoading(false);
+    }
+  }, [course.id, feedbackComment, feedbackRating]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2415,6 +2517,15 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
           };
         }
 
+        if (blockType === 'feedback') {
+          return {
+            key,
+            content: '',
+            prompt: '',
+            blockType,
+          };
+        }
+
         if (!content && !prompt) return null;
         return { key, content, prompt, blockType, items: null };
       })
@@ -2890,6 +3001,108 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
                           </table>
                         </div>
                       </div>
+                    </div>
+                  ) : block.blockType === 'feedback' ? (
+                    <div key={block.key} className="not-prose my-10 p-8 rounded-3xl bg-gradient-to-br from-[#0c1425] to-[#080c14] border border-white/10 shadow-2xl relative overflow-hidden group">
+                      {/* Decorative background element */}
+                      <div className="absolute -bottom-20 -left-20 w-64 h-64 bg-vibe-500/5 blur-[100px] rounded-full group-hover:bg-vibe-500/10 transition-colors duration-1000"></div>
+
+                      {feedbackSubmitted ? (
+                        <div className="relative z-10 py-10 text-center space-y-4 animate-in fade-in zoom-in duration-500">
+                          <div className="w-16 h-16 bg-emerald-500/20 rounded-full flex items-center justify-center mx-auto border border-emerald-500/30">
+                            <Star className="w-8 h-8 text-emerald-400 fill-emerald-400" />
+                          </div>
+                          <div className="space-y-2">
+                            <h4 className="text-2xl font-bold text-white font-display">Спасибо за отзыв!</h4>
+                            <p className="text-slate-400 text-sm max-w-xs mx-auto">Ваше мнение помогает нам делать курс ещё лучше.</p>
+                          </div>
+                          <div className="pt-2 space-y-3">
+                            <div className="flex items-center justify-center gap-1">
+                              {[1, 2, 3, 4, 5].map((star) => (
+                                <Star
+                                  key={star}
+                                  className={`w-5 h-5 ${feedbackRating >= star ? 'text-yellow-400 fill-yellow-400' : 'text-slate-700'}`}
+                                />
+                              ))}
+                            </div>
+                            {feedbackComment.trim() ? (
+                              <p className="text-slate-300 text-sm max-w-xl mx-auto whitespace-pre-line">{feedbackComment.trim()}</p>
+                            ) : null}
+                            <button
+                              type="button"
+                              onClick={() => setFeedbackSubmitted(false)}
+                              className="mx-auto inline-flex items-center justify-center px-4 py-2 rounded-xl border border-white/10 bg-white/5 text-slate-200 text-sm hover:bg-white/10 transition-colors disabled:opacity-50"
+                              disabled={feedbackLoading}
+                              style={{ cursor: feedbackLoading ? 'default' : 'pointer' }}
+                            >
+                              Редактировать отзыв
+                            </button>
+                            {feedbackSavedAt ? (
+                              <div className="text-xs text-slate-500">
+                                Сохранено: {new Date(feedbackSavedAt).toLocaleString('ru-RU')}
+                              </div>
+                            ) : null}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="relative z-10 space-y-8">
+                          <div className="text-center space-y-2">
+                            <h3 className="text-2xl font-bold text-white font-display tracking-tight">Как вам этот курс?</h3>
+                            <p className="text-sm text-slate-400">Поставьте оценку и поделитесь впечатлениями</p>
+                          </div>
+
+                          <div className="flex justify-center gap-3">
+                            {[1, 2, 3, 4, 5].map((star) => (
+                              <button
+                                key={star}
+                                type="button"
+                                onClick={() => setFeedbackRating(star)}
+                                disabled={feedbackLoading}
+                                className="group/star p-1 transition-all duration-300 hover:scale-125 focus:outline-none"
+                                style={{ cursor: feedbackLoading ? 'default' : 'pointer' }}
+                              >
+                                <Star
+                                  className={`w-10 h-10 transition-all duration-300 ${feedbackRating >= star
+                                      ? 'text-yellow-400 fill-yellow-400 drop-shadow-[0_0_10px_rgba(250,204,21,0.4)]'
+                                      : 'text-slate-700 hover:text-slate-500'
+                                    }`}
+                                />
+                              </button>
+                            ))}
+                          </div>
+
+                          <div className="space-y-4">
+                            <textarea
+                              value={feedbackComment}
+                              onChange={(e) => setFeedbackComment(e.target.value)}
+                              placeholder="Что вам особенно понравилось или что стоит улучшить?..."
+                              className="w-full h-32 px-5 py-4 rounded-2xl bg-black/40 border border-white/5 text-slate-200 text-sm focus:outline-none focus:border-vibe-500/50 focus:ring-1 focus:ring-vibe-500/50 transition-all resize-none placeholder:text-slate-600"
+                              disabled={feedbackLoading}
+                            />
+                            {feedbackError ? (
+                              <div className="text-sm text-red-200 bg-red-500/10 border border-red-500/20 rounded-2xl px-4 py-3">
+                                {feedbackError}
+                              </div>
+                            ) : null}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                void handleSubmitFeedback();
+                              }}
+                              disabled={feedbackRating === 0 || feedbackLoading}
+                              className="w-full py-4 rounded-2xl bg-vibe-600 text-white font-bold text-sm hover:bg-vibe-500 transition-all shadow-lg shadow-vibe-900/20 disabled:opacity-30 disabled:grayscale disabled:cursor-not-allowed group/btn"
+                              style={{ cursor: feedbackRating > 0 && !feedbackLoading ? 'pointer' : 'default' }}
+                            >
+                              <span className="flex items-center justify-center gap-2">
+                                {feedbackLoading ? 'Сохраняем…' : feedbackRating === 0 ? 'Выберите оценку' : 'Отправить отзыв'}
+                                {feedbackRating > 0 && !feedbackLoading && (
+                                  <ChevronRight className="w-4 h-4 group-hover/btn:translate-x-1 transition-transform" />
+                                )}
+                              </span>
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   ) : (
                     <div key={block.key} className="space-y-3">

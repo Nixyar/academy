@@ -127,3 +127,11 @@ A structured table with columns for Element, Questions, and Example.
   ]
 }
 ```
+
+### 8. Feedback
+Interactive block for rating the lesson (1-5 stars) and leaving a comment.
+```json
+{
+  "type": "feedback"
+}
+```
