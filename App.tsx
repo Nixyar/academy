@@ -14,6 +14,7 @@ import { userFromProfile } from './services/userFromProfile';
 import { fetchCourseContent, fetchCourses } from './services/coursesApi';
 import { fetchCoursesProgress } from './services/progressApi';
 import { syncTbankCoursePurchase } from './services/paymentsApi';
+import { fetchPurchasedCourseIds } from './services/purchasesApi';
 import { ApiError } from './services/apiClient';
 import { getRouteSeo } from './src/seo/useRouteSeo';
 
@@ -205,6 +206,11 @@ const App: React.FC = () => {
     }
   }, [user?.id]);
 
+  const markCoursesAsPurchased = useCallback((list: Course[], purchasedIds: Set<string>) => {
+    if (!Array.isArray(list) || list.length === 0 || purchasedIds.size === 0) return list;
+    return list.map((course) => (purchasedIds.has(course.id) ? { ...course, isPurchased: true } : course));
+  }, []);
+
   const derivePurchasedCourseIds = useCallback((list: Course[]) => {
     return new Set(
       (list || [])
@@ -239,40 +245,54 @@ const App: React.FC = () => {
     if (purchasesFetchRef.current) return purchasesFetchRef.current;
 
     const promise = (async () => {
-      let currentCourses = courses;
-      let fetchedCourses: Course[] | null = null;
+      const [coursesResult, purchasedResult] = await Promise.allSettled([fetchCourses(), fetchPurchasedCourseIds()]);
 
-      try {
-        fetchedCourses = await fetchCourses();
-        currentCourses = fetchedCourses;
-        setCourses((prev) => mergeCoursesPreservingContent(prev, fetchedCourses as Course[]));
+      const nextCourses = coursesResult.status === 'fulfilled' ? coursesResult.value : courses;
+      if (coursesResult.status === 'fulfilled') {
+        setCourses((prev) => mergeCoursesPreservingContent(prev, coursesResult.value as Course[]));
         coursesLoadedRef.current = true;
-      } catch {
-        // ignore - fall back to existing list
       }
 
-      const next = derivePurchasedCourseIds(currentCourses);
-      setPurchasedCourseIds(next);
-      return next;
+      const derivedFromCourses = derivePurchasedCourseIds(nextCourses);
+      const fromPurchasesApi =
+        purchasedResult.status === 'fulfilled'
+          ? new Set(purchasedResult.value.filter((id) => typeof id === 'string' && id.trim()).map((id) => id.trim()))
+          : new Set<string>();
+
+      const merged = new Set<string>([...derivedFromCourses, ...fromPurchasesApi]);
+      setPurchasedCourseIds(merged);
+      if (merged.size > 0) {
+        setCourses((prev) => markCoursesAsPurchased(prev, merged));
+      }
+      return merged;
     })();
 
     purchasesFetchRef.current = promise;
     return promise;
-  }, [user?.id, courses, derivePurchasedCourseIds, mergeCoursesPreservingContent]);
+  }, [user?.id, courses, derivePurchasedCourseIds, markCoursesAsPurchased, mergeCoursesPreservingContent]);
 
   const refreshPurchasedCourses = useCallback(async () => {
     purchasesFetchRef.current = null;
     try {
-      const currentCourses = await fetchCourses();
+      const [currentCourses, purchasedIds] = await Promise.all([fetchCourses(), fetchPurchasedCourseIds()]);
       setCourses((prev) => mergeCoursesPreservingContent(prev, currentCourses));
       coursesLoadedRef.current = true;
-      const next = derivePurchasedCourseIds(currentCourses);
-      setPurchasedCourseIds(next);
-      return next;
+
+      const derivedFromCourses = derivePurchasedCourseIds(currentCourses);
+      const fromPurchasesApi = new Set(
+        purchasedIds.filter((id) => typeof id === 'string' && id.trim()).map((id) => id.trim()),
+      );
+      const merged = new Set<string>([...derivedFromCourses, ...fromPurchasesApi]);
+
+      setPurchasedCourseIds(merged);
+      if (merged.size > 0) {
+        setCourses((prev) => markCoursesAsPurchased(prev, merged));
+      }
+      return merged;
     } catch {
       return ensurePurchasedCoursesLoaded();
     }
-  }, [ensurePurchasedCoursesLoaded, derivePurchasedCourseIds, mergeCoursesPreservingContent]);
+  }, [ensurePurchasedCoursesLoaded, derivePurchasedCourseIds, markCoursesAsPurchased, mergeCoursesPreservingContent]);
 
   useEffect(() => {
     if (isAuthCallbackPath) return;
@@ -427,6 +447,15 @@ const App: React.FC = () => {
         const paid = Boolean(result?.paidAt) || status === 'confirmed' || status === 'paid';
         setPaymentResult({ open: true, status: paid ? 'success' : 'fail' });
         if (paid) {
+          const purchasedId = typeof result?.courseId === 'string' && result.courseId.trim() ? result.courseId.trim() : null;
+          if (purchasedId) {
+            setPurchasedCourseIds((prev) => {
+              const next = new Set(prev);
+              next.add(purchasedId);
+              return next;
+            });
+            setCourses((prev) => prev.map((course) => (course.id === purchasedId ? { ...course, isPurchased: true } : course)));
+          }
           await refreshPurchasedCourses();
         }
       } catch {
