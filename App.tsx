@@ -703,6 +703,7 @@ const App: React.FC = () => {
         onAuthenticated={(authedUser) => {
           setUser(authedUser);
           setHasFetchedProfile(true);
+          setBootstrapping(false);
           navigateToProfile();
         }}
       />
