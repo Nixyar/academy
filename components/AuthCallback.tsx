@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { supabase } from '../services/supabaseClient';
 import { me, setSession } from '../services/authApi';
 import { ApiError } from '../services/apiClient';
@@ -13,17 +13,26 @@ export function AuthCallback(props: { onAuthenticated: (user: User) => void }) {
   useEffect(() => {
     if (hasRunRef.current) return;
     hasRunRef.current = true;
-    let cancelled = false;
 
     async function run() {
       try {
         if (!supabase) throw new Error('SUPABASE_ENV_MISSING');
-        setStage('exchanging');
 
         const code = new URLSearchParams(window.location.search).get('code');
         if (!code) throw new Error('OAUTH_CODE_MISSING');
 
-        const { data, error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
+        setStage('exchanging');
+
+        const exchangePromise = supabase.auth.exchangeCodeForSession(code);
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('EXCHANGE_TIMEOUT')), 10000)
+        );
+
+        const { data, error: exchangeError } = await Promise.race([
+          exchangePromise,
+          timeoutPromise
+        ]) as any;
+
         if (exchangeError) throw exchangeError;
         if (!data.session) throw new Error('SESSION_MISSING');
 
@@ -32,27 +41,27 @@ export function AuthCallback(props: { onAuthenticated: (user: User) => void }) {
 
         setStage('loadingProfile');
         const profile = await me();
+
         const user = userFromProfile(profile);
 
-        if (cancelled) return;
         setStage('redirecting');
         props.onAuthenticated(user);
-        // Force navigation so we definitely leave the callback screen even if SPA routing listeners fail
-        window.location.replace('/profile');
-        // Extra safety: in case replace is blocked, retry once shortly after
+
+        // Give SPA navigation a chance to work first
         setTimeout(() => {
           if (window.location.pathname.startsWith('/auth/callback')) {
-            window.location.assign('/profile');
+            window.location.replace('/profile');
           }
-        }, 500);
+        }, 1000);
       } catch (e: any) {
-        if (cancelled) return;
-        console.error('Auth callback failed', e);
+        console.error('[AuthCallback] Auth callback failed:', e);
         const message =
           e?.message === 'SUPABASE_ENV_MISSING'
             ? 'Не настроены переменные окружения Supabase (VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY).'
             : e?.message === 'OAUTH_CODE_MISSING'
               ? 'Не найден параметр code в URL. Проверьте Redirect URL в Supabase.'
+              : e?.message === 'EXCHANGE_TIMEOUT'
+                ? 'Превышено время ожидания обмена кода на сессию. Попробуйте авторизоваться заново.'
               : e instanceof ApiError && e.status === 401
                 ? 'Не удалось сохранить сессию на бэкенде (401). Проверьте, что /api/auth/session возвращает httpOnly cookies с Access-Control-Allow-Credentials.'
             : e?.message || 'Ошибка авторизации.';
@@ -61,10 +70,15 @@ export function AuthCallback(props: { onAuthenticated: (user: User) => void }) {
     }
 
     void run();
-    return () => {
-      cancelled = true;
-    };
-  }, [props]);
+  }, []);
+
+  const stageLabels = {
+    idle: 'Инициализация...',
+    exchanging: 'Обмен кода на сессию...',
+    saving: 'Сохранение сессии...',
+    loadingProfile: 'Загрузка профиля...',
+    redirecting: 'Перенаправление...',
+  };
 
   return (
     <div className="min-h-screen bg-void text-white flex items-center justify-center px-6">
@@ -78,7 +92,10 @@ export function AuthCallback(props: { onAuthenticated: (user: User) => void }) {
             {error}
           </div>
         ) : (
-          <div className="text-slate-300 text-sm">Подождите пару секунд…</div>
+          <div className="text-slate-300 text-sm">
+            <div className="animate-pulse mb-2">{stageLabels[stage]}</div>
+            <div className="text-xs text-slate-500">Подождите пару секунд…</div>
+          </div>
         )}
       </div>
     </div>
