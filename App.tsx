@@ -729,7 +729,12 @@ const App: React.FC = () => {
       <PaymentResultModal
         isOpen={paymentResult.open}
         status={paymentResult.status}
-        onClose={() => setPaymentResult((prev) => ({ ...prev, open: false }))}
+        onClose={async () => {
+          if (paymentResult.status === 'success') {
+            await refreshPurchasedCourses();
+          }
+          setPaymentResult((prev) => ({ ...prev, open: false }));
+        }}
       />
       <PurchaseCourseModal
         isOpen={purchaseModalOpen}
