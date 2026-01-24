@@ -768,7 +768,12 @@ const App: React.FC = () => {
       <PurchaseCourseModal
         isOpen={purchaseModalOpen}
         course={purchaseCourse}
-        onClose={() => setPurchaseModalOpen(false)}
+        onClose={() => {
+          setPurchaseModalOpen(false);
+          setPurchaseCourse(null);
+          setLessonsLoadingFor(null);
+          navigateToProfile();
+        }}
       />
       {user ? (
         <ConsentModal
