@@ -1,18 +1,18 @@
 <!DOCTYPE html>
 <html lang="ru">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
     <title>VibeCoderAI — создание сайтов и AI-продуктов с помощью промптов</title>
     <meta
             name="description"
             content="Онлайн-курсы по Vibe Coding и Prompt Engineering. Научись создавать сайты и AI-продукты без кода и конструкторов."
     />
-    <link rel="icon" type="image/png" href="/favicon-96x96.png" sizes="96x96" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <link rel="shortcut icon" href="/favicon.ico" />
-    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
-    <link rel="manifest" href="/site.webmanifest" />
+    <link rel="icon" type="image/png" href="/favicon-96x96.png" sizes="96x96"/>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg"/>
+    <link rel="shortcut icon" href="/favicon.ico"/>
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png"/>
+    <link rel="manifest" href="/site.webmanifest"/>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
       tailwind.config = {
@@ -36,7 +36,7 @@
               },
               pink: {
                 glow: '#ff0055', // Neon Pink
-              }
+              },
             },
             fontFamily: {
               sans: ['Inter', 'sans-serif'],
@@ -53,48 +53,36 @@
             },
             keyframes: {
               'progress-glow': {
-                '0%': { backgroundPosition: '200% 0' },
-                '100%': { backgroundPosition: '-200% 0' },
+                '0%': {backgroundPosition: '200% 0'},
+                '100%': {backgroundPosition: '-200% 0'},
               },
               blob: {
-                '0%': { transform: 'translate(0px, 0px) scale(1)' },
-                '33%': { transform: 'translate(30px, -50px) scale(1.1)' },
-                '66%': { transform: 'translate(-20px, 20px) scale(0.9)' },
-                '100%': { transform: 'translate(0px, 0px) scale(1)' },
+                '0%': {transform: 'translate(0px, 0px) scale(1)'},
+                '33%': {transform: 'translate(30px, -50px) scale(1.1)'},
+                '66%': {transform: 'translate(-20px, 20px) scale(0.9)'},
+                '100%': {transform: 'translate(0px, 0px) scale(1)'},
               },
               float: {
-                '0%, 100%': { transform: 'translateY(0)' },
-                '50%': { transform: 'translateY(-20px)' },
-              }
-            }
+                '0%, 100%': {transform: 'translateY(0)'},
+                '50%': {transform: 'translateY(-20px)'},
+              },
+            },
           },
         },
-      }
+      };
     </script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=Space+Grotesk:wght@300;500;700&display=swap" rel="stylesheet">
-    <!-- Yandex.Metrika counter -->
-    <script type="text/javascript">
-      (function(m,e,t,r,i,k,a){
-        m[i]=m[i]||function(){(m[i].a=m[i].a||[]).push(arguments)};
-        m[i].l=1*new Date();
-        for (var j = 0; j < document.scripts.length; j++) {if (document.scripts[j].src === r) { return; }}
-        k=e.createElement(t),a=e.getElementsByTagName(t)[0],k.async=1,k.src=r,a.parentNode.insertBefore(k,a)
-      })(window, document,'script','https://mc.yandex.ru/metrika/tag.js?id=106428213', 'ym');
-
-      ym(106428213, 'init', {ssr:true, clickmap:true, ecommerce:"dataLayer", referrer: document.referrer, url: location.href, accurateTrackBounce:true, trackLinks:true});
-    </script>
-    <noscript><div><img src="https://mc.yandex.ru/watch/106428213" style="position:absolute; left:-9999px;" alt="" /></div></noscript>
-    <!-- /Yandex.Metrika counter -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=Space+Grotesk:wght@300;500;700&display=swap"
+          rel="stylesheet">
     <script type="importmap">
-    {
-      "imports": {
-        "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
-        "react/": "https://esm.sh/react@^19.2.3/",
-        "react": "https://esm.sh/react@^19.2.3",
-        "lucide-react": "https://esm.sh/lucide-react@^0.561.0",
-        "@google/genai": "https://esm.sh/@google/genai@^1.33.0"
-      }
-    }
+        {
+          "imports": {
+            "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+            "react/": "https://esm.sh/react@^19.2.3/",
+            "react": "https://esm.sh/react@^19.2.3",
+            "lucide-react": "https://esm.sh/lucide-react@^0.561.0",
+            "@google/genai": "https://esm.sh/@google/genai@^1.33.0"
+          }
+        }
     </script>
     <style>
       :root {
@@ -102,41 +90,50 @@
         --orbit-purple: #bc13fe;
         --orbit-pink: #ff0055;
       }
+
       body {
         font-family: 'Inter', sans-serif;
         background-color: #030712;
         color: white;
         overflow-x: hidden;
       }
+
       h1, h2, h3, h4, h5, h6 {
         font-family: 'Space Grotesk', sans-serif;
       }
+
       .custom-scrollbar::-webkit-scrollbar {
         width: 6px;
         height: 6px;
       }
+
       .custom-scrollbar::-webkit-scrollbar-track {
-        background: transparent; 
+        background: transparent;
       }
+
       .custom-scrollbar::-webkit-scrollbar-thumb {
-        background: rgba(255,255,255,0.1); 
+        background: rgba(255, 255, 255, 0.1);
         border-radius: 10px;
       }
+
       .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-        background: rgba(255,255,255,0.2); 
+        background: rgba(255, 255, 255, 0.2);
       }
+
       .orbit-container {
         position: relative;
         width: 80px;
         height: 80px;
         filter: drop-shadow(0 0 12px rgba(0, 243, 255, 0.25));
       }
+
       .orbit-inner,
       .orbit-outer {
         position: absolute;
         border: 2px solid transparent;
         border-radius: 50%;
       }
+
       .orbit-inner {
         top: 15px;
         left: 15px;
@@ -146,6 +143,7 @@
         border-bottom-color: var(--orbit-purple);
         animation: orbit-spin 0.8s reverse linear infinite;
       }
+
       .orbit-outer {
         top: 0;
         left: 0;
@@ -156,6 +154,7 @@
         animation: orbit-spin 2s linear infinite;
         opacity: 0.7;
       }
+
       .sr-only {
         position: absolute;
         width: 1px;
@@ -163,25 +162,44 @@
         padding: 0;
         margin: -1px;
         overflow: hidden;
-        clip: rect(0,0,0,0);
+        clip: rect(0, 0, 0, 0);
         white-space: nowrap;
         border: 0;
       }
+
       @keyframes orbit-spin {
-        from { transform: rotate(0deg); }
-        to { transform: rotate(360deg); }
+        from {
+          transform: rotate(0deg);
+        }
+        to {
+          transform: rotate(360deg);
+        }
       }
     </style>
-  <link rel="stylesheet" href="/index.css">
+    <link rel="stylesheet" href="/index.css">
 </head>
-  <body>
-  <h1 class="sr-only">
+<body>
+<!-- Yandex.Metrika counter -->
+<script type="text/javascript">
+  (function(m,e,t,r,i,k,a){
+    m[i]=m[i]||function(){(m[i].a=m[i].a||[]).push(arguments)};
+    m[i].l=1*new Date();
+    for (var j = 0; j < document.scripts.length; j++) {if (document.scripts[j].src === r) { return; }}
+    k=e.createElement(t),a=e.getElementsByTagName(t)[0],k.async=1,k.src=r,a.parentNode.insertBefore(k,a)
+  })(window, document,'script','https://mc.yandex.ru/metrika/tag.js?id=106428213', 'ym');
+
+  ym(106428213, 'init', {ssr:true, clickmap:true, ecommerce:"dataLayer", referrer: document.referrer, url: location.href, accurateTrackBounce:true, trackLinks:true});
+</script>
+<noscript><div><img src="https://mc.yandex.ru/watch/106428213" style="position:absolute; left:-9999px;" alt="" /></div></noscript>
+<!-- /Yandex.Metrika counter -->
+<h1 class="sr-only">
     Создание цифровых продуктов и решений с помощью AI и промптов
-  </h1>
-  <p class="sr-only">
-    VibeCoderAI — образовательная платформа, где ты учишься создавать цифровые продукты и решения с помощью AI, развивая мышление и работу с промптами.
-  </p>
-  <div id="root"></div>
-  <script type="module" src="/index.tsx"></script>
-  </body>
+</h1>
+<p class="sr-only">
+    VibeCoderAI — образовательная платформа, где ты учишься создавать цифровые продукты и решения с
+    помощью AI, развивая мышление и работу с промптами.
+</p>
+<div id="root"></div>
+<script type="module" src="/index.tsx"></script>
+</body>
 </html>
