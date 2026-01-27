@@ -69,8 +69,8 @@ function decorateHtmlForPreview(rawHtml: string, extraCss: string | null): strin
   const stylePieces = [IFRAME_BASE_STYLES];
   if (extraCss && extraCss.trim() && !raw.includes(extraCss)) stylePieces.push(extraCss);
   const styleTag = `<style>${stylePieces.join('\n')}</style>`;
-  const tailwindLinkTag = `<link rel="stylesheet" href="/tailwind.css">`;
-  const headInjection = `${tailwindLinkTag}${styleTag}`;
+  const tailwindScriptTag = `<script src="https://cdn.tailwindcss.com"></script>`;
+  const headInjection = `${tailwindScriptTag}${styleTag}`;
 
   const ensureHead = (html: string) => {
     if (/<head[^>]*>/i.test(html)) {
