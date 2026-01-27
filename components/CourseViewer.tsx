@@ -522,13 +522,66 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
   );
   const hasCompletedJob = activeJobStatus === 'done';
 
+  const getActiveJobMeta = useCallback((progress: CourseProgress | null | undefined) => {
+    const active = progress && typeof progress === 'object' ? (progress as any).active_job : null;
+    const status =
+      (progress as any)?.active_job_status ??
+      (active && typeof active === 'object' ? (active as any).status : null);
+    const jobId =
+      (progress as any)?.active_job_id ??
+      (active && typeof active === 'object'
+        ? (active as any).jobId ?? (active as any).job_id ?? null
+        : null);
+    const error =
+      (progress as any)?.active_job_error ??
+      (active && typeof active === 'object' ? (active as any).error ?? null : null);
+    const details =
+      (progress as any)?.active_job_error_details ??
+      (active && typeof active === 'object' ? (active as any).error_details ?? null : null);
+
+    return { active, status, jobId, error, details };
+  }, []);
+
+  const mergeProgressPreservingFailedJob = useCallback((next: CourseProgress) => {
+    const prev = courseProgressRef.current ?? {};
+    const prevMeta = getActiveJobMeta(prev);
+    const nextMeta = getActiveJobMeta(next);
+
+    const nextStatus = nextMeta.status;
+    const prevFailed =
+      prevMeta.status === 'failed' &&
+      prevMeta.jobId &&
+      prevMeta.jobId === nextMeta.jobId &&
+      (nextStatus === 'running' || nextStatus === 'queued');
+
+    if (!prevFailed) return next;
+
+    const mergedActive = {
+      ...(nextMeta.active && typeof nextMeta.active === 'object' ? nextMeta.active : {}),
+      ...(prevMeta.active && typeof prevMeta.active === 'object' ? prevMeta.active : {}),
+      jobId: prevMeta.jobId,
+      status: 'failed',
+      error: prevMeta.error ?? (nextMeta.active as any)?.error ?? 'FAILED',
+      ...(prevMeta.details ? { error_details: prevMeta.details } : null),
+    };
+
+    return {
+      ...(next as any),
+      active_job: mergedActive,
+      active_job_status: 'failed',
+      active_job_error: prevMeta.error ?? (mergedActive as any).error ?? 'FAILED',
+      ...(prevMeta.details ? { active_job_error_details: prevMeta.details } : null),
+    };
+  }, [getActiveJobMeta]);
+
   const syncProgress = useCallback(
     (next: CourseProgress) => {
-      courseProgressRef.current = next;
-      setCourseProgress(next);
-      onProgressChange?.(course.id, next);
+      const merged = mergeProgressPreservingFailedJob(next);
+      courseProgressRef.current = merged;
+      setCourseProgress(merged);
+      onProgressChange?.(course.id, merged);
     },
-    [course.id, onProgressChange],
+    [course.id, mergeProgressPreservingFailedJob, onProgressChange],
   );
 
   const setLocalActiveJobStatus = useCallback(
@@ -875,7 +928,10 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
           if (cancelled) return;
 
           const statusActiveJob = (statusProgress as any)?.active_job ?? null;
-          const next = { ...(courseProgressRef.current ?? {}), active_job: statusActiveJob };
+          const next = mergeProgressPreservingFailedJob({
+            ...(courseProgressRef.current ?? {}),
+            active_job: statusActiveJob,
+          });
           courseProgressRef.current = next;
           setCourseProgress(next);
           onProgressChange?.(course.id, next);
@@ -905,7 +961,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [activeJobStatus, course.id, lessonIdsKey, onProgressChange, syncProgress]);
+  }, [activeJobStatus, course.id, lessonIdsKey, mergeProgressPreservingFailedJob, onProgressChange, syncProgress]);
 
   useEffect(() => {
     let cancelled = false;
