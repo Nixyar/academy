@@ -179,7 +179,6 @@ function describeApiError(error: unknown, fallback: string): string {
 }
 
 const GENERIC_RELOAD_ERROR = 'Произошла ошибка. Попробуйте перезагрузить страницу';
-const GENERIC_LLM_ERROR = 'Ошибка генерации. Попробуйте ещё раз.';
 
 function getLessonMode(lesson: any): 'edit' | 'add_page' | 'create' {
   const rawSettings = lesson?.settings;
@@ -1151,16 +1150,8 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     const hasSavedHtml = hasStoredFilesResult || Boolean(savedResultHtml && savedResultHtml.trim());
     const failedMessage =
       activeJobStatus === 'failed' && isActiveJobForLesson
-        ? GENERIC_LLM_ERROR
+        ? [activeJobError ?? 'Генерация не удалась.', activeJobErrorDetails].filter(Boolean).join(': ')
         : null;
-    if (activeJobStatus === 'failed' && isActiveJobForLesson) {
-      console.error('LLM job failed', {
-        error: activeJobError,
-        details: activeJobErrorDetails,
-        lessonId: activeLesson.id,
-        jobId: activeJobId,
-      });
-    }
 
     const initialPrompt = savedPrompt ?? (isPromptLockedForLesson ? activeJobPrompt : '');
     setPromptInput(initialPrompt);
@@ -1737,8 +1728,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
         ? errorDetailsRaw.trim()
         : null;
       if (errorMessage) {
-        console.error('LLM payload error', { errorMessage, errorDetails, payload });
-        setLlmError(GENERIC_LLM_ERROR);
+        setLlmError(errorDetails ? `${errorMessage}: ${errorDetails}` : errorMessage);
       }
 
       if (isFinal) {
@@ -1877,7 +1867,12 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
               ? JSON.stringify(detailsRaw)
               : null;
         const baseMessage =
-          ((payload as any)?.error ?? (payload as any)?.message ?? data) || 'LLM_STREAM_ERROR';
+          ((payload as any)?.error ?? (payload as any)?.message ?? data) ||
+          'Ошибка генерации HTML. Попробуйте ещё раз.';
+        const message =
+          details && typeof baseMessage === 'string' && baseMessage.trim()
+            ? `${baseMessage}: ${details}`
+            : baseMessage;
         const hasRenderablePayload =
           payload &&
           typeof payload === 'object' &&
@@ -1901,12 +1896,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
           return;
         }
 
-        console.error('LLM stream error', {
-          message: typeof baseMessage === 'string' ? baseMessage : String(baseMessage),
-          details,
-          payload,
-        });
-        setLlmError(GENERIC_LLM_ERROR);
+        setLlmError(typeof message === 'string' ? message : String(message));
         setIsSendingPrompt(false);
         cleanupStream();
         setLlmStatusText(null);
@@ -2301,11 +2291,16 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
       // which was causing the streaming effect to abort and restart unnecessarily.
       startHtmlStream(response.jobId);
     } catch (error) {
-      const apiDetails = error instanceof ApiError
-        ? { status: error.status, body: error.body }
-        : null;
-      console.error('Failed to send prompt to LLM', { error, apiDetails });
-      setLlmError(GENERIC_LLM_ERROR);
+      console.error('Failed to send prompt to LLM', error);
+      let message = describeApiError(error, GENERIC_RELOAD_ERROR);
+      if (error instanceof ApiError && error.status === 502) {
+        const code = (error.body as any)?.error;
+        if (code === 'LLM_PLAN_NO_SECTIONS') {
+          message =
+            'Сервер вернул LLM_PLAN_NO_SECTIONS. Проверьте, что для этого урока корректно выставлен mode (edit/add_page) и что /api/v1/html/start поддерживает запуск с mode.';
+        }
+      }
+      setLlmError(message);
       setIsSendingPrompt(false);
       setLlmStatusText(null);
     }
