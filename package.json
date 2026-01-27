@@ -4,9 +4,10 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "start": "vite",
-    "build": "vite build && node scripts/generate-sitemap.mjs",
-    "build:prerender": "PRERENDER=1 vite build && node scripts/generate-sitemap.mjs",
+    "start": "npm run build:tailwind && vite",
+    "build:tailwind": "tailwindcss -c tailwind.config.cjs -i tailwind.input.css -o public/tailwind.css --minify",
+    "build": "npm run build:tailwind && vite build && node scripts/generate-sitemap.mjs",
+    "build:prerender": "npm run build:tailwind && PRERENDER=1 vite build && node scripts/generate-sitemap.mjs",
     "postinstall": "node scripts/patch-prerenderer-host.mjs",
     "preview": "vite preview"
   },
@@ -22,6 +23,7 @@
     "@types/react": "^19.2.7",
     "@vitejs/plugin-react": "^5.0.0",
     "puppeteer": "^22.15.0",
+    "tailwindcss": "^3.4.17",
     "typescript": "~5.8.2",
     "vite": "^6.2.0",
     "vite-plugin-prerender": "^1.0.8"
