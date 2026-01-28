@@ -81,9 +81,14 @@ export default defineConfig(({ mode }) => {
           ]
           : []),
       ],
-      define: {
-        'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
-        'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY)
+      build: {
+        minify: 'terser',
+        terserOptions: {
+          compress: {
+            drop_console: true, // Удалить console.* в production
+            drop_debugger: true,
+          },
+        },
       },
       resolve: {
         alias: {
