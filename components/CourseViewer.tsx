@@ -7,7 +7,7 @@ import { fetchCourseProgress, fetchCourseProgressStatus, fetchCourseResume, patc
 import { ApiError, apiFetch } from '../services/apiClient';
 import { fetchCourseQuota, type CourseQuota } from '../services/courseQuotaApi';
 import { fetchLessonContent, getCachedLessonContent } from '../services/lessonsApi';
-import { supabase } from '../services/supabaseClient';
+import { getCourseFeedback, submitCourseFeedback } from '../services/feedbackApi';
 
 const IFRAME_BASE_STYLES = `
   :root { color-scheme: dark; }
@@ -346,33 +346,25 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     setFeedbackSavedAt(null);
 
     async function loadExistingFeedback() {
-      if (!supabase) return;
       setFeedbackLoading(true);
 
       try {
-        const { data: userData, error: userError } = await supabase.auth.getUser();
-        if (userError) throw userError;
-        const userId = userData.user?.id;
-        if (!userId) return;
+        const data = await getCourseFeedback(course.id);
+        if (cancelled) return;
 
-        const { data, error } = await supabase
-          .from('course_feedback')
-          .select('rating,comment,updated_at')
-          .eq('course_id', course.id)
-          .eq('user_id', userId)
-          .maybeSingle();
-
-        if (error) throw error;
-        if (!data || cancelled) return;
-
-        setFeedbackRating(typeof (data as any).rating === 'number' ? (data as any).rating : 0);
-        setFeedbackComment(typeof (data as any).comment === 'string' ? (data as any).comment : '');
-        setFeedbackSubmitted(true);
-        setFeedbackSavedAt(typeof (data as any).updated_at === 'string' ? (data as any).updated_at : null);
+        if (data && typeof data.rating === 'number') {
+          setFeedbackRating(data.rating);
+          setFeedbackComment(data.comment || '');
+          setFeedbackSubmitted(true);
+          setFeedbackSavedAt(data.updated_at || null);
+        }
       } catch (err) {
         if (cancelled) return;
         console.warn('Failed to load course feedback', err);
-        setFeedbackError('Не удалось загрузить ваш отзыв. Попробуйте позже.');
+        // Не показываем ошибку если просто нет отзыва
+        if (err instanceof ApiError && err.status !== 401) {
+          setFeedbackError('Не удалось загрузить ваш отзыв. Попробуйте позже.');
+        }
       } finally {
         if (cancelled) return;
         setFeedbackLoading(false);
@@ -388,42 +380,27 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
   const handleSubmitFeedback = useCallback(async () => {
     if (feedbackRating <= 0) return;
     setFeedbackError(null);
-
-    if (!supabase) {
-      setFeedbackError('Не настроены переменные окружения Supabase (VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY).');
-      return;
-    }
-
     setFeedbackLoading(true);
+
     try {
-      const { data: userData, error: userError } = await supabase.auth.getUser();
-      if (userError) throw userError;
-      const user = userData.user;
-      if (!user) {
-        setFeedbackError('Нужно войти через Supabase, чтобы оставить отзыв.');
-        return;
-      }
-
-      const course_id = course.id;
-      const rating = feedbackRating;
-      const comment = feedbackComment.trim();
-
-      const { data, error } = await supabase
-        .from('course_feedback')
-        .upsert(
-          { course_id, user_id: user.id, rating, comment, metadata: { page: 'course_end' } },
-          { onConflict: 'user_id,course_id' },
-        )
-        .select('updated_at')
-        .maybeSingle();
-
-      if (error) throw error;
+      const result = await submitCourseFeedback(course.id, feedbackRating, feedbackComment.trim());
 
       setFeedbackSubmitted(true);
-      setFeedbackSavedAt(typeof (data as any)?.updated_at === 'string' ? (data as any).updated_at : new Date().toISOString());
-    } catch (err: any) {
+      setFeedbackSavedAt(result.updated_at || new Date().toISOString());
+    } catch (err) {
       console.error('Failed to submit course feedback', err);
-      const message = typeof err?.message === 'string' && err.message.trim() ? err.message : 'Не удалось отправить отзыв.';
+
+      let message = 'Не удалось отправить отзыв.';
+      if (err instanceof ApiError) {
+        if (err.status === 401) {
+          message = 'Необходимо войти в аккаунт, чтобы оставить отзыв.';
+        } else if (err.body?.message) {
+          message = err.body.message;
+        }
+      } else if (err && typeof err === 'object' && 'message' in err && typeof err.message === 'string') {
+        message = err.message;
+      }
+
       setFeedbackError(message);
     } finally {
       setFeedbackLoading(false);
