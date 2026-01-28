@@ -436,6 +436,21 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
       cancelled = true;
     };
   }, [activeLesson.id]);
+
+  // Prefetch next lesson content for instant navigation
+  useEffect(() => {
+    const nextLessonIndex = activeLessonIndex + 1;
+    if (nextLessonIndex < course.lessons.length) {
+      const nextLesson = course.lessons[nextLessonIndex];
+      if (nextLesson?.id) {
+        // Prefetch in background - errors are silently ignored
+        fetchLessonContent(nextLesson.id).catch(() => {
+          // Prefetch failure is non-critical
+        });
+      }
+    }
+  }, [activeLessonIndex, course.lessons]);
+
   const lastLessonIdRef = useRef<string>(course.lessons[activeLessonIndex]?.id ?? '');
   const fetchedResultJobIdRef = useRef<string | null>(null);
   const previewIframeRef = useRef<HTMLIFrameElement | null>(null);
@@ -2501,6 +2516,21 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     }
   }, [activeJobStatus, savedResultHtml, storedWorkspace.source]);
 
+  // Предупреждение при попытке закрыть страницу во время генерации
+  useEffect(() => {
+    if (!isSendingPrompt) return;
+
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      // Современные браузеры игнорируют кастомное сообщение, но требуют returnValue
+      e.returnValue = 'Идет генерация сайта (~5 минут). Уверены что хотите уйти?';
+      return e.returnValue;
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [isSendingPrompt]);
+
   type LessonBlockItem = {
     key: string;
     content: string;
@@ -2690,7 +2720,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
                         <div className="space-y-1.5 mt-3">
                           <div className="flex justify-between items-center text-[10px] font-mono">
                             <span className="text-slate-400 truncate max-w-[180px]">
-                              {llmStatusText || (activeJobStatus === 'running' ? 'Генерация...' : activeJobStatus === 'queued' ? 'В очереди...' : 'Инициализация...')}
+                              {llmStatusText || (activeJobStatus === 'running' ? 'Генерация... (~5 мин)' : activeJobStatus === 'queued' ? 'В очереди...' : 'Инициализация...')}
                             </span>
                             <span className="text-vibe-400 animate-pulse">Running</span>
                           </div>
@@ -2763,6 +2793,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
                         (quotaRequired && (courseQuotaLoading || !courseQuota)) ||
                         (courseQuota?.limit != null && courseQuota.remaining === 0)
                       }
+                      title={!isSendingPrompt ? 'Генерация займет около 5 минут' : undefined}
                       className="px-3 py-1.5 rounded-lg bg-vibe-600 text-white text-xs font-semibold flex items-center gap-2 shadow-lg shadow-vibe-900/30 hover:bg-vibe-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                       style={{ cursor: 'pointer' }}
                     >
