@@ -467,6 +467,11 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     (rawActiveJob && typeof rawActiveJob === 'object' ? (rawActiveJob as any).error_details : null) ??
     (rawActiveJob && typeof rawActiveJob === 'object' ? (rawActiveJob as any).details : null);
   const activeJobErrorDetails = typeof rawActiveJobErrorDetails === 'string' ? rawActiveJobErrorDetails : null;
+  const rawActiveJobUpdatedAt =
+    rawActiveJob && typeof rawActiveJob === 'object'
+      ? (rawActiveJob as any).updatedAt ?? (rawActiveJob as any).updated_at
+      : null;
+  const activeJobUpdatedAt = typeof rawActiveJobUpdatedAt === 'string' ? rawActiveJobUpdatedAt : null;
   const rawActiveJobLessonId =
     typeof (courseProgress as any)?.active_job_lesson_id === 'string'
       ? (courseProgress as any).active_job_lesson_id
@@ -2400,6 +2405,16 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     if (savedResultHtml && savedResultHtml.trim()) return;
     if (fetchedResultJobIdRef.current === activeJobId) return;
 
+    // Если джоба завершена давно (> 2 минут), бэкенд уже удалил её из памяти.
+    // Результат либо в savedResultHtml (выше проверка), либо его уже не получить.
+    if (activeJobUpdatedAt) {
+      const updatedTime = new Date(activeJobUpdatedAt).getTime();
+      const ageMinutes = (Date.now() - updatedTime) / 60000;
+      if (ageMinutes > 2) {
+        return; // Старая джоба - бэкенд вернет 404
+      }
+    }
+
     fetchedResultJobIdRef.current = activeJobId;
     setIsSendingPrompt(true);
 
@@ -2431,6 +2446,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
   }, [
     activeJobId,
     activeJobStatus,
+    activeJobUpdatedAt,
     applyFinalPayload,
     course.id,
     isActiveJobForLesson,
