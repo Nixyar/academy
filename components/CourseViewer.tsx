@@ -387,14 +387,14 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
 
       setFeedbackSubmitted(true);
       setFeedbackSavedAt(result.updated_at || new Date().toISOString());
-    } catch (err) {
+    } catch (err: unknown) {
       console.error('Failed to submit course feedback', err);
 
       let message = 'Не удалось отправить отзыв.';
       if (err instanceof ApiError) {
         if (err.status === 401) {
           message = 'Необходимо войти в аккаунт, чтобы оставить отзыв.';
-        } else if (err.body?.message) {
+        } else if (err.body && typeof err.body === 'object' && 'message' in err.body && typeof err.body.message === 'string') {
           message = err.body.message;
         }
       } else if (err && typeof err === 'object' && 'message' in err && typeof err.message === 'string') {
