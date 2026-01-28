@@ -558,10 +558,28 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
 
   const syncProgress = useCallback(
     (next: CourseProgress) => {
+      const prev = courseProgressRef.current ?? {};
       const merged = mergeProgressPreservingFailedJob(next);
-      courseProgressRef.current = merged;
-      setCourseProgress(merged);
-      onProgressChange?.(course.id, merged);
+
+      // Сохраняем result.html из prev если он есть, но нет в merged
+      const prevResultHtml = (prev as any)?.result?.html;
+      const mergedResultHtml = (merged as any)?.result?.html;
+      if (prevResultHtml && !mergedResultHtml) {
+        const preservedResult = {
+          ...merged,
+          result: {
+            ...((merged as any).result || {}),
+            html: prevResultHtml,
+          },
+        };
+        courseProgressRef.current = preservedResult;
+        setCourseProgress(preservedResult);
+        onProgressChange?.(course.id, preservedResult);
+      } else {
+        courseProgressRef.current = merged;
+        setCourseProgress(merged);
+        onProgressChange?.(course.id, merged);
+      }
     },
     [course.id, mergeProgressPreservingFailedJob, onProgressChange],
   );
@@ -1756,7 +1774,26 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
             ? workspaceFiles[activeFile]
             : buildHtml(nextCss ?? null, nextOutline, mergedSections, mergedOrder);
 
-      if (finalHtml?.trim().length) setLlmHtml(finalHtml);
+      if (finalHtml?.trim().length) {
+        setLlmHtml(finalHtml);
+
+        // Сохраняем HTML в courseProgress, чтобы он не потерялся при refresh
+        if (!workspaceFiles && htmlFromPayload) {
+          setCourseProgress((prev) => {
+            if (!prev) return prev;
+            const currentResult = (prev as any).result || {};
+            const next = {
+              ...prev,
+              result: {
+                ...currentResult,
+                html: finalHtml,
+              },
+            };
+            courseProgressRef.current = next as any;
+            return next;
+          });
+        }
+      }
 
       const errorMessage =
         typeof payload?.error === 'string'
