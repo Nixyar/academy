@@ -2417,6 +2417,11 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
         }
       } catch (error) {
         console.error('Failed to fetch html result', error);
+        // Если джоба не найдена (404), не показываем ошибку - это нормально для старых джоб
+        if (error instanceof ApiError && error.status === 404) {
+          setIsSendingPrompt(false);
+          return;
+        }
         setLlmError(GENERIC_RELOAD_ERROR);
         setIsSendingPrompt(false);
       }
