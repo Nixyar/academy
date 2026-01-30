@@ -337,79 +337,31 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
   const streamControllerRef = useRef<AbortController | null>(null);
   const streamingJobIdRef = useRef<string | null>(null);
   const streamLastEventAtRef = useRef<number>(0);
+  const progressPollActiveRef = useRef(false);
+  const pollBackoffUntilRef = useRef(0);
   const canPersistPromptRef = useRef(true);
 
-  useEffect(() => {
-    let cancelled = false;
+  const extractFeedbackFromProgress = useCallback((progress: CourseProgress | null | undefined) => {
+    if (!progress || typeof progress !== 'object') return null;
+    const raw = (progress as any).feedback ?? (progress as any).course_feedback ?? null;
+    if (!raw || typeof raw !== 'object') return null;
+    const rating = typeof (raw as any).rating === 'number' ? (raw as any).rating : Number((raw as any).rating);
+    if (!Number.isFinite(rating) || rating <= 0) return null;
+    const comment =
+      typeof (raw as any).comment === 'string' ? (raw as any).comment : null;
+    const updatedAt =
+      typeof (raw as any).updated_at === 'string'
+        ? (raw as any).updated_at
+        : (typeof (raw as any).updatedAt === 'string' ? (raw as any).updatedAt : null);
+    return { rating, comment, updatedAt };
+  }, []);
 
-    setFeedbackError(null);
-    setFeedbackLoading(false);
-    setFeedbackRating(0);
-    setFeedbackComment('');
-    setFeedbackSubmitted(false);
-    setFeedbackSavedAt(null);
+  const hasFeedbackBlock = useMemo(() => {
+    const blocksRaw = (activeLessonResolved as any)?.blocks;
+    const list = Array.isArray(blocksRaw) ? blocksRaw : (blocksRaw ? [blocksRaw] : []);
+    return list.some((block) => block && typeof block === 'object' && (block as any).type === 'feedback');
+  }, [activeLessonResolved]);
 
-    async function loadExistingFeedback() {
-      setFeedbackLoading(true);
-
-      try {
-        const data = await getCourseFeedback(course.id);
-        if (cancelled) return;
-
-        if (data && typeof data.rating === 'number') {
-          setFeedbackRating(data.rating);
-          setFeedbackComment(data.comment || '');
-          setFeedbackSubmitted(true);
-          setFeedbackSavedAt(data.updated_at || null);
-        }
-      } catch (err) {
-        if (cancelled) return;
-        console.warn('Failed to load course feedback', err);
-        // Не показываем ошибку если просто нет отзыва
-        if (err instanceof ApiError && err.status !== 401) {
-          setFeedbackError('Не удалось загрузить ваш отзыв. Попробуйте позже.');
-        }
-      } finally {
-        if (cancelled) return;
-        setFeedbackLoading(false);
-      }
-    }
-
-    void loadExistingFeedback();
-    return () => {
-      cancelled = true;
-    };
-  }, [course.id]);
-
-  const handleSubmitFeedback = useCallback(async () => {
-    if (feedbackRating <= 0) return;
-    setFeedbackError(null);
-    setFeedbackLoading(true);
-
-    try {
-      const result = await submitCourseFeedback(course.id, feedbackRating, feedbackComment.trim());
-
-      setFeedbackSubmitted(true);
-      setFeedbackSavedAt(result.updated_at || new Date().toISOString());
-    } catch (err: unknown) {
-      console.error('Failed to submit course feedback', err);
-
-      let message = 'Не удалось отправить отзыв.';
-      if (err instanceof ApiError) {
-        if (err.status === 401) {
-          message = 'Необходимо войти в аккаунт, чтобы оставить отзыв.';
-        } else if (err.body && typeof err.body === 'object' && 'message' in err.body && typeof err.body.message === 'string') {
-          message = err.body.message;
-        }
-      } else if (err && typeof err === 'object' && 'message' in err && typeof err.message === 'string') {
-        message = err.message;
-      }
-
-      setFeedbackError(message);
-    } finally {
-      setFeedbackLoading(false);
-    }
-  }, [course.id, feedbackComment, feedbackRating]);
 
   useEffect(() => {
     let cancelled = false;
@@ -506,6 +458,13 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     (rawActiveJob && typeof rawActiveJob === 'object' ? (rawActiveJob as any).error_details : null) ??
     (rawActiveJob && typeof rawActiveJob === 'object' ? (rawActiveJob as any).details : null);
   const activeJobErrorDetails = typeof rawActiveJobErrorDetails === 'string' ? rawActiveJobErrorDetails : null;
+  const rawActiveJobStatusMessage =
+    (rawActiveJob && typeof rawActiveJob === 'object'
+      ? ((rawActiveJob as any).status_message ?? (rawActiveJob as any).statusMessage)
+      : null) ??
+    (courseProgress as any)?.active_job_status_message ??
+    null;
+  const activeJobStatusMessage = typeof rawActiveJobStatusMessage === 'string' ? rawActiveJobStatusMessage : null;
   const rawActiveJobUpdatedAt =
     rawActiveJob && typeof rawActiveJob === 'object'
       ? (rawActiveJob as any).updatedAt ?? (rawActiveJob as any).updated_at
@@ -622,6 +581,100 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     },
     [course.id, mergeProgressPreservingFailedJob, onProgressChange],
   );
+
+  useEffect(() => {
+    let cancelled = false;
+
+    setFeedbackError(null);
+    setFeedbackLoading(false);
+    setFeedbackRating(0);
+    setFeedbackComment('');
+    setFeedbackSubmitted(false);
+    setFeedbackSavedAt(null);
+
+    async function loadExistingFeedback() {
+      if (!hasFeedbackBlock) return;
+      setFeedbackLoading(true);
+
+      try {
+        const cached = extractFeedbackFromProgress(courseProgressRef.current);
+        if (cached) {
+          setFeedbackRating(cached.rating);
+          setFeedbackComment(cached.comment || '');
+          setFeedbackSubmitted(true);
+          setFeedbackSavedAt(cached.updatedAt || null);
+          return;
+        }
+
+        const data = await getCourseFeedback(course.id);
+        if (cancelled) return;
+
+        if (data && typeof data.rating === 'number') {
+          setFeedbackRating(data.rating);
+          setFeedbackComment(data.comment || '');
+          setFeedbackSubmitted(true);
+          setFeedbackSavedAt(data.updated_at || null);
+        }
+      } catch (err) {
+        if (cancelled) return;
+        console.warn('Failed to load course feedback', err);
+        // Не показываем ошибку если просто нет отзыва
+        if (err instanceof ApiError && err.status !== 401) {
+          setFeedbackError('Не удалось загрузить ваш отзыв. Попробуйте позже.');
+        }
+      } finally {
+        if (cancelled) return;
+        setFeedbackLoading(false);
+      }
+    }
+
+    void loadExistingFeedback();
+    return () => {
+      cancelled = true;
+    };
+  }, [course.id, extractFeedbackFromProgress, hasFeedbackBlock]);
+
+  const handleSubmitFeedback = useCallback(async () => {
+    if (feedbackRating <= 0) return;
+    setFeedbackError(null);
+    setFeedbackLoading(true);
+
+    try {
+      const result = await submitCourseFeedback(course.id, feedbackRating, feedbackComment.trim());
+
+      setFeedbackSubmitted(true);
+      const savedAt = result.updated_at || new Date().toISOString();
+      setFeedbackSavedAt(savedAt);
+      try {
+        const updated = await patchCourseProgress(course.id, {
+          op: 'course_feedback',
+          rating: feedbackRating,
+          comment: feedbackComment.trim(),
+          updatedAt: savedAt,
+        });
+        if (updated) syncProgress(updated);
+      } catch (progressError) {
+        console.warn('Failed to persist feedback in progress', progressError);
+      }
+    } catch (err: unknown) {
+      console.error('Failed to submit course feedback', err);
+
+      let message = 'Не удалось отправить отзыв.';
+      if (err instanceof ApiError) {
+        if (err.status === 401) {
+          message = 'Необходимо войти в аккаунт, чтобы оставить отзыв.';
+        } else if (err.body && typeof err.body === 'object' && 'message' in err.body && typeof err.body.message === 'string') {
+          message = err.body.message;
+        }
+      } else if (err && typeof err === 'object' && 'message' in err && typeof err.message === 'string') {
+        message = err.message;
+      }
+
+      setFeedbackError(message);
+    } finally {
+      setFeedbackLoading(false);
+    }
+  }, [course.id, feedbackComment, feedbackRating, syncProgress]);
 
   const setLocalActiveJobStatus = useCallback(
     (
@@ -1319,6 +1372,12 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     if (!isPromptLockedForLesson) return;
     setPromptInput(activeJobPrompt);
   }, [activeJobPrompt, isPromptLockedForLesson]);
+
+  useEffect(() => {
+    if (!activeJobStatusMessage) return;
+    if (activeJobStatus !== 'running' && activeJobStatus !== 'queued') return;
+    setLlmStatusText((current) => current ?? activeJobStatusMessage);
+  }, [activeJobStatus, activeJobStatusMessage]);
 
   useEffect(() => {
     if (!hasCompletedJob) return;
@@ -2144,8 +2203,11 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     let cancelled = false;
     let inFlight = false;
 
+    progressPollActiveRef.current = true;
+
     const interval = window.setInterval(() => {
       if (cancelled || inFlight) return;
+      if (pollBackoffUntilRef.current && Date.now() < pollBackoffUntilRef.current) return;
       inFlight = true;
       void (async () => {
         try {
@@ -2179,16 +2241,22 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
             setLlmStatusText((current) => current ?? 'Генерация продолжается...');
           }
         } catch (error) {
-          console.error('Failed to poll progress status', error);
+          if (error instanceof ApiError && error.status === 429) {
+            pollBackoffUntilRef.current = Date.now() + 30000;
+            setLlmStatusText('Слишком много запросов. Ждём 30 сек…');
+          } else {
+            console.error('Failed to poll progress status', error);
+          }
         } finally {
           inFlight = false;
         }
       })();
-    }, 10000);
+    }, 15000);
 
     return () => {
       cancelled = true;
       window.clearInterval(interval);
+      progressPollActiveRef.current = false;
     };
   }, [activeJobId, activeJobStatus, course.id, isActiveJobForLesson, isSendingPrompt, syncProgress]);
 
@@ -2201,6 +2269,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     if (!isActiveJobForLesson) return;
     if (!activeJobId) return;
     if (streamControllerRef.current) return;
+    if (progressPollActiveRef.current) return;
 
     let cancelled = false;
     let inFlight = false;
@@ -2208,6 +2277,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
 
     const tick = async () => {
       if (cancelled || inFlight) return;
+      if (pollBackoffUntilRef.current && Date.now() < pollBackoffUntilRef.current) return;
       inFlight = true;
       try {
         const result = await apiFetch<any>(`/api/v1/html/result?jobId=${encodeURIComponent(activeJobId)}`);
@@ -2243,6 +2313,12 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
             ? errorPayload.message
             : null;
           markLocalActiveJobFailed(activeJobId, { code, details, message: msg });
+          try {
+            const refreshed = await fetchCourseProgress(course.id, { skipCache: true });
+            if (!cancelled) syncProgress(refreshed ?? {});
+          } catch (progressError) {
+            console.error('Failed to refresh progress after error', progressError);
+          }
           setIsSendingPrompt(false);
           jobStartTimeRef.current = 0;
           setLlmStatusText(null);
@@ -2255,6 +2331,18 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
       } catch (error) {
         if (error instanceof ApiError && error.status === 404) {
           // Job isn't available on this instance; let the progress-status poller handle it.
+          try {
+            const refreshed = await fetchCourseProgress(course.id, { skipCache: true });
+            if (!cancelled) syncProgress(refreshed ?? {});
+          } catch (progressError) {
+            console.error('Failed to refresh progress after result 404', progressError);
+          }
+          if (intervalId != null) window.clearInterval(intervalId);
+          return;
+        }
+        if (error instanceof ApiError && error.status === 429) {
+          pollBackoffUntilRef.current = Date.now() + 30000;
+          setLlmStatusText('Слишком много запросов. Ждём 30 сек…');
           if (intervalId != null) window.clearInterval(intervalId);
           return;
         }
@@ -2266,7 +2354,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
 
     // Call immediately, then every 10s.
     void tick();
-    intervalId = window.setInterval(() => void tick(), 10000);
+    intervalId = window.setInterval(() => void tick(), 15000);
 
     return () => {
       cancelled = true;

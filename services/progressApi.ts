@@ -27,6 +27,7 @@ export function invalidateProgressCache(courseId?: string): void {
 export type CourseProgressPatch =
   | { op: 'quiz_answer'; lessonId: string; quizId: string; answer: unknown }
   | { op: 'lesson_status'; lessonId: string; status: LessonStatus; completedAt?: string | null }
+  | { op: 'course_feedback'; rating: number; comment?: string | null; updatedAt?: string | null }
   | { op: 'set_resume'; lessonId: string }
   | { op: 'lesson_prompt'; lessonId: string; prompt: string }
   | { op: 'touch_lesson'; lessonId: string }
