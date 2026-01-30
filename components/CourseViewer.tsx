@@ -180,6 +180,7 @@ function describeApiError(error: unknown, fallback: string): string {
 
 const GENERIC_RELOAD_ERROR = 'Произошла ошибка. Попробуйте перезагрузить страницу';
 const GENERIC_LLM_ERROR = 'Ошибка генерации. Попробуйте ещё раз.';
+const MAX_PROMPT_RETRIES = 2;
 
 function getLessonMode(lesson: any): 'edit' | 'add_page' | 'create' {
   const rawSettings = lesson?.settings;
@@ -310,6 +311,9 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
   const [progressLoading, setProgressLoading] = useState(false);
   const [promptInput, setPromptInput] = useState('');
   const [isSendingPrompt, setIsSendingPrompt] = useState(false);
+  const [promptRetryCount, setPromptRetryCount] = useState(0);
+  const jobStartTimeRef = useRef<number>(0);
+  const [jobElapsedSeconds, setJobElapsedSeconds] = useState(0);
   const [feedbackRating, setFeedbackRating] = useState(0);
   const [feedbackComment, setFeedbackComment] = useState('');
   const [feedbackSubmitted, setFeedbackSubmitted] = useState(false);
@@ -450,6 +454,26 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
       }
     }
   }, [activeLessonIndex, course.lessons]);
+
+  // Reset retry counter when switching lessons
+  useEffect(() => {
+    setPromptRetryCount(0);
+  }, [activeLesson.id]);
+
+  // Track elapsed time during job execution for progress display
+  useEffect(() => {
+    if (!isSendingPrompt || jobStartTimeRef.current === 0) {
+      setJobElapsedSeconds(0);
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      const elapsed = Math.floor((Date.now() - jobStartTimeRef.current) / 1000);
+      setJobElapsedSeconds(elapsed);
+    }, 1000);
+
+    return () => window.clearInterval(interval);
+  }, [isSendingPrompt]);
 
   const lastLessonIdRef = useRef<string>(course.lessons[activeLessonIndex]?.id ?? '');
   const fetchedResultJobIdRef = useRef<string | null>(null);
@@ -1310,6 +1334,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     llmSectionOrderRef.current = [];
     llmOutlineRef.current = null;
     setIsSendingPrompt(false);
+    jobStartTimeRef.current = 0;
     setLlmError(null);
   }, [hasCompletedJob, hasStoredFilesResult, savedResultHtml]);
 
@@ -1834,6 +1859,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
 
       if (isFinal) {
         setIsSendingPrompt(false);
+        jobStartTimeRef.current = 0;
         cleanupStream();
       }
     },
@@ -1999,6 +2025,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
         });
         setLlmError(GENERIC_LLM_ERROR);
         setIsSendingPrompt(false);
+        jobStartTimeRef.current = 0;
         cleanupStream();
         setLlmStatusText(null);
         markLocalActiveJobFailed(streamingJobIdRef.current ?? activeJobId, {
@@ -2145,6 +2172,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
             if (cancelled) return;
             syncProgress(refreshed ?? {});
             setIsSendingPrompt(false);
+            jobStartTimeRef.current = 0;
             setLlmStatusText(null);
             window.clearInterval(interval);
           } else {
@@ -2196,6 +2224,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
             console.error('Failed to refresh progress after done (poll)', progressError);
           }
           setIsSendingPrompt(false);
+          jobStartTimeRef.current = 0;
           if (intervalId != null) window.clearInterval(intervalId);
           return;
         }
@@ -2215,6 +2244,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
             : null;
           markLocalActiveJobFailed(activeJobId, { code, details, message: msg });
           setIsSendingPrompt(false);
+          jobStartTimeRef.current = 0;
           setLlmStatusText(null);
           if (intervalId != null) window.clearInterval(intervalId);
           return;
@@ -2282,6 +2312,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
                 : 'Ошибка генерации HTML. Попробуйте ещё раз.';
             setLlmError(message);
             setIsSendingPrompt(false);
+            jobStartTimeRef.current = 0;
             cleanupStream();
             setLlmStatusText(null);
           } else {
@@ -2325,6 +2356,11 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     setLlmSectionOrder([]);
     llmOutlineRef.current = null;
 
+    // Only reset retry count if this is a fresh user-initiated submit (not a retry)
+    if (promptRetryCount === 0) {
+      // Fresh submit - counter already at 0
+    }
+
     // Re-fetch lesson content without ETag before starting, to avoid stale cached settings (mode).
     let requestedMode = activeLessonMode;
     try {
@@ -2366,6 +2402,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
       // even if the SSE connection can't be established (common after refresh).
       {
         const now = new Date().toISOString();
+        jobStartTimeRef.current = Date.now(); // Track start time for progress display
         const next: CourseProgress = {
           ...(courseProgressRef.current ?? {}),
           active_job: {
@@ -2391,14 +2428,36 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
       // Removed redundant fetchCourseProgress(course.id) here to prevent "running" -> "queued" flicker
       // which was causing the streaming effect to abort and restart unnecessarily.
       startHtmlStream(response.jobId);
+      setPromptRetryCount(0); // Reset retry counter on success
     } catch (error) {
       const apiDetails = error instanceof ApiError
         ? { status: error.status, body: error.body }
         : null;
       console.error('Failed to send prompt to LLM', { error, apiDetails });
-      setLlmError(GENERIC_LLM_ERROR);
-      setIsSendingPrompt(false);
-      setLlmStatusText(null);
+
+      // Auto-retry on temporary errors (network, timeout, 5xx)
+      const isRetryableError =
+        error instanceof ApiError
+          ? error.status >= 500 || error.status === 408 || error.status === 429
+          : true; // Network errors are retryable
+
+      if (isRetryableError && promptRetryCount < MAX_PROMPT_RETRIES) {
+        const nextRetry = promptRetryCount + 1;
+        setPromptRetryCount(nextRetry);
+        setLlmStatusText(`Переподключение... (попытка ${nextRetry + 1}/${MAX_PROMPT_RETRIES + 1})`);
+
+        // Retry after 2 seconds
+        setTimeout(() => {
+          handlePromptSubmit();
+        }, 2000);
+      } else {
+        // All retries exhausted or non-retryable error
+        setLlmError(GENERIC_LLM_ERROR);
+        setIsSendingPrompt(false);
+        setLlmStatusText(null);
+        setPromptRetryCount(0);
+        jobStartTimeRef.current = 0;
+      }
     }
   }, [
     activeLesson.id,
@@ -2415,6 +2474,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     courseQuotaLoading,
     isSendingPrompt,
     promptInput,
+    promptRetryCount,
     quotaRequired,
     startHtmlStream,
     syncProgress,
@@ -2487,10 +2547,12 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
         // Если джоба не найдена (404), не показываем ошибку - это нормально для старых джоб
         if (error instanceof ApiError && error.status === 404) {
           setIsSendingPrompt(false);
+          jobStartTimeRef.current = 0;
           return;
         }
         setLlmError(GENERIC_RELOAD_ERROR);
         setIsSendingPrompt(false);
+        jobStartTimeRef.current = 0;
       }
     };
 
@@ -2513,6 +2575,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     setLlmHtml((current) => (current === savedResultHtml ? current : savedResultHtml));
     if (activeJobStatus !== 'running') {
       setIsSendingPrompt(false);
+      jobStartTimeRef.current = 0;
     }
   }, [activeJobStatus, savedResultHtml, storedWorkspace.source]);
 
@@ -2720,9 +2783,19 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
                         <div className="space-y-1.5 mt-3">
                           <div className="flex justify-between items-center text-[10px] font-mono">
                             <span className="text-slate-400 truncate max-w-[180px]">
-                              {llmStatusText || (activeJobStatus === 'running' ? 'Генерация... (~5 мин)' : activeJobStatus === 'queued' ? 'В очереди...' : 'Инициализация...')}
+                              {llmStatusText || (() => {
+                                if (activeJobStatus === 'running') return 'Генерация... (~5 мин)';
+                                if (activeJobStatus === 'queued') {
+                                  if (jobElapsedSeconds > 45) return 'Высокая нагрузка. Ожидайте...';
+                                  if (jobElapsedSeconds > 30) return 'Очередь длинная...';
+                                  return 'В очереди...';
+                                }
+                                return 'Инициализация...';
+                              })()}
                             </span>
-                            <span className="text-vibe-400 animate-pulse">Running</span>
+                            <span className="text-vibe-400 animate-pulse">
+                              {jobElapsedSeconds > 0 ? `${Math.floor(jobElapsedSeconds / 60)}:${String(jobElapsedSeconds % 60).padStart(2, '0')}` : 'Running'}
+                            </span>
                           </div>
                           <div className="w-full h-1 bg-white/5 rounded-full overflow-hidden">
                             <div
