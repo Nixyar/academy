@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Course, CourseProgress, LessonType } from '../types';
 import { ImageAnalyzer } from './ImageAnalyzer';
 import { ImageEditor } from './ImageEditor';
-import { FileText, Menu, X, ChevronLeft, ChevronRight, ChevronDown, Send, Info, Lightbulb, Star } from 'lucide-react';
+import { FileText, Menu, X, ChevronLeft, ChevronRight, ChevronDown, Send, Info, Lightbulb, Star, Sparkles, Maximize, Minimize } from 'lucide-react';
 import { fetchCourseProgress, fetchCourseProgressStatus, fetchCourseResume, patchCourseProgress } from '../services/progressApi';
 import { ApiError, apiFetch } from '../services/apiClient';
 import { fetchCourseQuota, type CourseQuota } from '../services/courseQuotaApi';
@@ -285,6 +285,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     }
     return 0;
   });
+  const [isFullScreen, setIsFullScreen] = useState(false);
   const activeLesson = course.lessons[activeLessonIndex];
   const [activeLessonContent, setActiveLessonContent] = useState<{
     blocks: unknown;
@@ -2821,7 +2822,14 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
       default:
         // Default interactive playground for text-based lessons
         return (
-          <div className="flex flex-col h-full bg-[#050914] border-l border-white/5">
+          <div className="flex flex-col bg-[#050914] border-l border-white/5 h-full relative">
+            <button
+              onClick={() => setIsFullScreen(!isFullScreen)}
+              className="absolute top-4 right-4 z-[60] p-2.5 rounded-xl bg-[#0f172a]/90 border border-white/20 text-white shadow-lg shadow-black/50 hover:bg-vibe-600 hover:border-vibe-500 transition-all backdrop-blur-md group"
+              title={isFullScreen ? 'Свернуть' : 'На весь экран'}
+            >
+              {isFullScreen ? <Minimize className="w-5 h-5 group-hover:scale-90 transition-transform" /> : <Maximize className="w-5 h-5 group-hover:scale-110 transition-transform" />}
+            </button>
             <div className="flex-1 border-b border-white/5 relative overflow-hidden">
               {hasRenderablePreview && (
                 <div className="absolute inset-0 flex flex-col">
@@ -2911,58 +2919,105 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
               )}
             </div>
             <div className="h-1/3 p-4 bg-[#02050e] flex flex-col">
-              <div className="flex gap-2 mb-2">
-                <div className="w-3 h-3 rounded-full bg-red-500/20"></div>
-                <div className="w-3 h-3 rounded-full bg-yellow-500/20"></div>
-                <div className="w-3 h-3 rounded-full bg-green-500/20"></div>
-              </div>
               {llmError && !hasRenderablePreview && (
                 <div className="text-xs text-red-200 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2 mb-2">
                   {llmError}
                 </div>
               )}
-              <div className="relative flex-1 mt-1">
-                <textarea
-                  value={promptInput}
-                  onChange={(e) => setPromptInput(e.target.value)}
-                  disabled={isLectureLesson}
-                  className={`w-full h-full bg-transparent text-sm resize-none font-mono focus:outline-none pr-28 ${isWorkshopLesson ? 'text-slate-200' : 'text-slate-500'
-                    }`}
-                  placeholder={isLectureLesson ? '' : 'Console ready...'}
-                />
-                {isWorkshopLesson && promptInput.trim().length > 0 && (
-                  <div className="absolute bottom-3 right-3 flex items-center gap-3">
-                    {quotaRequired && (
-                      <span className="text-[11px] text-slate-400/80 font-mono">
-                        {courseQuotaLoading
-                          ? 'Проверяем лимит...'
-                          : courseQuotaError
-                            ? 'Лимит недоступен'
-                            : !courseQuota
-                              ? 'Проверяем лимит...'
-                              : `Осталось запросов: ${courseQuota.remaining ?? 0}`}
-                      </span>
-                    )}
-                    <button
-                      type="button"
-                      onClick={handlePromptSubmit}
-                      disabled={
-                        isSendingPrompt ||
-                        activeLessonContentLoading ||
-                        !activeLessonContent ||
-                        Boolean(activeLessonContentError) ||
-                        (quotaRequired && (courseQuotaLoading || !courseQuota)) ||
-                        (courseQuota?.limit != null && courseQuota.remaining === 0)
-                      }
-                      title={!isSendingPrompt ? 'Генерация займет около 5 минут' : undefined}
-                      className="px-3 py-1.5 rounded-lg bg-vibe-600 text-white text-xs font-semibold flex items-center gap-2 shadow-lg shadow-vibe-900/30 hover:bg-vibe-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                      style={{ cursor: 'pointer' }}
-                    >
-                      <Send className="w-4 h-4" />
-                      {isSendingPrompt ? 'Отправляем...' : 'Отправить'}
-                    </button>
+              <div className="relative flex-1 mt-1 font-mono group/console">
+                {/* Your Turn Tooltip - Only for Workshop when ready */}
+                {isWorkshopLesson && !isPromptLocked && promptInput.length === 0 && (
+                  <div className="absolute -top-12 left-1/2 -translate-x-1/2 z-50 animate-bounce">
+                    <div className="bg-blue-600 text-white text-[10px] font-bold px-3 py-1.5 rounded-lg shadow-lg shadow-blue-900/40 whitespace-nowrap flex items-center gap-1.5 uppercase tracking-wider relative">
+                      <Sparkles className="w-3 h-3 text-blue-200" />
+                      Твоя очередь
+                      <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-blue-600 rotate-45"></div>
+                    </div>
                   </div>
                 )}
+
+                <div className={`
+                    absolute inset-0 rounded-xl transition-all duration-300 flex flex-col overflow-hidden bg-[#050914]
+                    ${isWorkshopLesson && !isLectureLesson
+                    ? 'shadow-[0_0_20px_rgba(59,130,246,0.15)] ring-1 ring-blue-500/20'
+                    : 'opacity-80'
+                  }
+                  `}>
+                  {/* Console Header */}
+                  <div className={`
+                      h-8 px-4 flex items-center justify-between border-b transition-colors
+                      ${isWorkshopLesson && !isLectureLesson
+                      ? 'bg-blue-500/5 border-blue-500/20'
+                      : 'bg-white/5 border-white/5'
+                    }
+                    `}>
+                    <div className="flex items-center gap-2">
+                      <div className={`w-1.5 h-1.5 rounded-full ${isWorkshopLesson && !isLectureLesson ? 'bg-blue-500 animate-pulse' : 'bg-slate-600'}`}></div>
+                      <span className={`text-[10px] font-bold uppercase tracking-[0.15em] ${isWorkshopLesson && !isLectureLesson ? 'text-blue-400' : 'text-slate-500'}`}>
+                        Prompt Editor
+                      </span>
+                    </div>
+
+                  </div>
+
+                  {/* Console Input Area */}
+                  <div className="flex-1 relative">
+                    <textarea
+                      value={promptInput}
+                      onChange={(e) => setPromptInput(e.target.value)}
+                      disabled={isLectureLesson || isPromptLocked}
+                      className={`
+                          w-full h-full bg-transparent text-sm resize-none font-mono focus:outline-none p-4
+                          placeholder:text-slate-600/50
+                          ${isWorkshopLesson ? 'text-blue-100' : 'text-slate-500'}
+                          ${isLectureLesson ? 'cursor-not-allowed opacity-50' : ''}
+                        `}
+                      placeholder={
+                        isLectureLesson
+                          ? 'Дождитесь начала воркшопа...'
+                          : 'Введите промпт...'
+                      }
+                      spellCheck={false}
+                    />
+
+                    {/* Submit Button */}
+                    <div className="absolute bottom-3 right-3">
+                      {isWorkshopLesson && (
+                        <button
+                          type="button"
+                          onClick={handlePromptSubmit}
+                          disabled={
+                            isSendingPrompt ||
+                            activeLessonContentLoading ||
+                            !activeLessonContent ||
+                            Boolean(activeLessonContentError) ||
+                            (quotaRequired && (courseQuotaLoading || !courseQuota)) ||
+                            (courseQuota?.limit != null && courseQuota.remaining === 0) ||
+                            promptInput.trim().length === 0
+                          }
+                          className={`
+                              px-4 py-2 rounded-lg text-[10px] font-bold uppercase tracking-wider flex items-center gap-2 transition-all duration-300
+                              ${promptInput.trim().length > 0 && !isSendingPrompt
+                              ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/40 hover:bg-blue-500 hover:scale-105 active:scale-95'
+                              : 'bg-white/5 text-slate-500 border border-white/5 cursor-not-allowed'
+                            }
+                            `}
+                        >
+                          {isSendingPrompt ? (
+                            <>
+                              <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                              <span className="opacity-80">Генерация...</span>
+                            </>
+                          ) : (
+                            <>
+                              Создать <Sparkles className={`w-3 h-3 ${promptInput.trim().length > 0 ? 'text-blue-200' : 'text-slate-600'}`} />
+                            </>
+                          )}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -3352,8 +3407,8 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
                               >
                                 <Star
                                   className={`w-10 h-10 transition-all duration-300 ${feedbackRating >= star
-                                      ? 'text-yellow-400 fill-yellow-400 drop-shadow-[0_0_10px_rgba(250,204,21,0.4)]'
-                                      : 'text-slate-700 hover:text-slate-500'
+                                    ? 'text-yellow-400 fill-yellow-400 drop-shadow-[0_0_10px_rgba(250,204,21,0.4)]'
+                                    : 'text-slate-700 hover:text-slate-500'
                                     }`}
                                 />
                               </button>
@@ -3554,7 +3609,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
           </div>
 
           {/* Right Side: Interactive Window */}
-          <div className="w-full md:w-1/2 h-1/2 md:h-full border-t md:border-t-0 md:border-l border-white/5 bg-[#050914] z-10 shadow-2xl relative">
+          <div className={`border-t md:border-t-0 md:border-l border-white/5 bg-[#050914] shadow-2xl transition-all duration-300 ${isFullScreen ? 'fixed inset-0 z-[100] w-full h-full' : 'w-full md:w-1/2 h-1/2 md:h-full z-10 relative'}`}>
             {/* IDE Header Decoration */}
             <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-vibe-500/50 to-transparent"></div>
             {renderRightPanel()}
