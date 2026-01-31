@@ -346,6 +346,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
   const progressPollActiveRef = useRef(false);
   const pollBackoffUntilRef = useRef(0);
   const canPersistPromptRef = useRef(true);
+  const lessonContentRef = useRef<HTMLDivElement>(null);
 
   const extractFeedbackFromProgress = useCallback((progress: CourseProgress | null | undefined) => {
     if (!progress || typeof progress !== 'object') return null;
@@ -593,6 +594,14 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     },
     [course.id, mergeProgressPreservingFailedJob, onProgressChange],
   );
+
+
+
+  useEffect(() => {
+    if (lessonContentRef.current) {
+      lessonContentRef.current.scrollTo(0, 0);
+    }
+  }, [activeLesson.id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -3319,7 +3328,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
         <main className="flex-1 flex flex-col md:flex-row h-full overflow-hidden">
 
           {/* Left Side: Description & Video */}
-          <div className="w-full md:w-1/2 overflow-y-auto p-6 md:p-10 custom-scrollbar bg-void">
+          <div ref={lessonContentRef} className="w-full md:w-1/2 overflow-y-auto p-6 md:p-10 custom-scrollbar bg-void">
             <div className="max-w-3xl mx-auto">
               <div className="mb-8">
                 <span className="text-vibe-400 text-xs font-bold uppercase tracking-widest mb-2 block">
