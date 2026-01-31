@@ -182,7 +182,7 @@ const GENERIC_RELOAD_ERROR = 'Произошла ошибка. Попробуй�
 const GENERIC_LLM_ERROR = 'Ошибка генерации. Попробуйте ещё раз.';
 const MAX_PROMPT_RETRIES = 2;
 
-function getLessonMode(lesson: any): 'edit' | 'add_page' | 'create' {
+function getLessonMode(lesson: any): 'edit' | 'add_page' | 'create' | 'text' {
   const rawSettings = lesson?.settings;
   let settings: any = rawSettings;
   if (typeof rawSettings === 'string') {
@@ -201,6 +201,7 @@ function getLessonMode(lesson: any): 'edit' | 'add_page' | 'create' {
   const normalized = typeof modeRaw === 'string' ? modeRaw.trim().toLowerCase() : '';
   if (normalized === 'edit') return 'edit';
   if (normalized === 'add_page' || normalized === 'add-page' || normalized === 'add page') return 'add_page';
+  if (normalized === 'text') return 'text';
   return 'create';
 }
 
@@ -300,6 +301,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     [activeLesson, activeLessonContent],
   );
   const activeLessonMode = useMemo(() => getLessonMode(activeLessonResolved), [activeLessonResolved]);
+  const isTextMode = activeLessonMode === 'text';
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [quizAnswer, setQuizAnswer] = useState<number | null>(null);
   const [copiedExample, setCopiedExample] = useState<number | null>(null);
@@ -325,6 +327,8 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
   const [courseQuotaLoading, setCourseQuotaLoading] = useState(false);
   const [courseQuotaError, setCourseQuotaError] = useState<string | null>(null);
   const [llmHtml, setLlmHtml] = useState<string | null>(null);
+  const [llmText, setLlmText] = useState<string | null>(null);
+  const [typedText, setTypedText] = useState('');
   const [llmError, setLlmError] = useState<string | null>(null);
   const [llmOutline, setLlmOutline] = useState<unknown>(null);
   const [llmCss, setLlmCss] = useState<string | null>(null);
@@ -335,6 +339,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
   const llmSectionsRef = useRef<Record<string, string>>({});
   const llmSectionOrderRef = useRef<string[]>([]);
   const llmOutlineRef = useRef<unknown>(null);
+  const typingTimerRef = useRef<number | null>(null);
   const streamControllerRef = useRef<AbortController | null>(null);
   const streamingJobIdRef = useRef<string | null>(null);
   const streamLastEventAtRef = useRef<number>(0);
@@ -493,6 +498,12 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
         : typeof (courseProgress as any)?.lessons?.[activeLesson.id]?.result?.html === 'string'
           ? ((courseProgress as any).lessons?.[activeLesson.id]?.result as any).html
           : '';
+  const savedResultText =
+    typeof (courseProgress as any)?.result?.text === 'string'
+      ? ((courseProgress as any).result as any).text
+      : typeof (courseProgress as any)?.lessons?.[activeLesson.id]?.result?.text === 'string'
+        ? ((courseProgress as any).lessons?.[activeLesson.id]?.result as any).text
+        : '';
   const hasStoredFilesResult = Boolean(
     ((courseProgress as any)?.result?.files &&
       typeof (courseProgress as any).result.files === 'object' &&
@@ -1327,6 +1338,8 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
       setIsSendingPrompt(runningForLesson);
       if (runningForLesson) {
         setLlmHtml(null);
+        setLlmText(null);
+        setTypedText('');
         setLlmError(null);
         if (lessonChanged) {
           setLlmOutline(null);
@@ -1344,6 +1357,8 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
         setLlmError(failedMessage);
       } else {
         setLlmHtml(hasSavedHtml && !hasStoredFilesResult ? savedResultHtml : null);
+        setLlmText(null);
+        setTypedText('');
         setLlmError(failedMessage);
         setLlmOutline(null);
         setLlmCss(null);
@@ -1684,6 +1699,60 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     return raw.length > 0 ? raw : null;
   }, [llmHtml, liveHtmlFromParts]);
 
+  const liveTextOutput = useMemo(() => {
+    const raw = String(llmText ?? '').trim();
+    return raw.length > 0 ? raw : null;
+  }, [llmText]);
+
+  const storedTextOutput = useMemo(() => {
+    const raw = String(savedResultText ?? '').trim();
+    return raw.length > 0 ? raw : null;
+  }, [savedResultText]);
+
+  const effectiveTextOutput = useMemo(() => {
+    if (isSendingPrompt) return liveTextOutput;
+    return liveTextOutput ?? storedTextOutput ?? null;
+  }, [isSendingPrompt, liveTextOutput, storedTextOutput]);
+  const hasRenderableText = Boolean(effectiveTextOutput && effectiveTextOutput.trim().length > 0);
+
+  useEffect(() => {
+    if (typingTimerRef.current) {
+      window.clearTimeout(typingTimerRef.current);
+      typingTimerRef.current = null;
+    }
+    if (!isTextMode) {
+      setTypedText('');
+      return;
+    }
+    if (isSendingPrompt) return;
+    const full = effectiveTextOutput ?? '';
+    if (!full.trim()) {
+      setTypedText('');
+      return;
+    }
+
+    const speed = 14;
+    const chunk = full.length > 2400 ? 4 : full.length > 900 ? 3 : 2;
+    let index = 0;
+
+    const tick = () => {
+      index = Math.min(full.length, index + chunk);
+      setTypedText(full.slice(0, index));
+      if (index < full.length) {
+        typingTimerRef.current = window.setTimeout(tick, speed);
+      }
+    };
+
+    tick();
+
+    return () => {
+      if (typingTimerRef.current) {
+        window.clearTimeout(typingTimerRef.current);
+        typingTimerRef.current = null;
+      }
+    };
+  }, [effectiveTextOutput, isSendingPrompt, isTextMode]);
+
   const previewWorkspace = useMemo<Workspace>(() => {
     // If we have live HTML content being generated, it should override or merge into the workspace.
     if (liveSingleHtml) {
@@ -1715,8 +1784,9 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
   }, [activeLesson.id, previewWorkspace.activeFile, previewWorkspace.files]);
 
   const hasRenderablePreview = useMemo(() => {
+    if (isTextMode) return false;
     return Object.values(previewWorkspace.files).some((value) => typeof value === 'string' && value.trim().length > 0);
-  }, [previewWorkspace.files]);
+  }, [isTextMode, previewWorkspace.files]);
 
   const setActiveFileRemote = useCallback(
     async (fileRaw: string) => {
@@ -1895,6 +1965,34 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
         }
       }
 
+      const isTextPayload =
+        payload && typeof payload === 'object'
+          ? ((payload as any).mode === 'text' || (payload as any).type === 'text')
+          : false;
+      const textValue =
+        isTextPayload && typeof (payload as any)?.text === 'string'
+          ? ((payload as any).text as string)
+          : (isTextPayload && typeof (payload as any)?.content === 'string'
+            ? ((payload as any).content as string)
+            : null);
+
+      if (typeof textValue === 'string') {
+        setLlmText(textValue);
+        setCourseProgress((prev) => {
+          if (!prev) return prev;
+          const currentResult = (prev as any).result || {};
+          const next = {
+            ...prev,
+            result: {
+              ...currentResult,
+              text: textValue,
+            },
+          };
+          courseProgressRef.current = next as any;
+          return next;
+        });
+      }
+
       const errorMessage =
         typeof payload?.error === 'string'
           ? payload.error
@@ -2006,6 +2104,17 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
           nextOrder,
         );
         if (partialHtml) setLlmHtml(partialHtml);
+        return;
+      }
+
+      if (eventName === 'text') {
+        const text =
+          payload && typeof (payload as any).text === 'string'
+            ? (payload as any).text
+            : payload && typeof (payload as any).content === 'string'
+              ? (payload as any).content
+              : data;
+        if (typeof text === 'string') setLlmText(text);
         return;
       }
 
@@ -2440,6 +2549,8 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     setLlmError(null);
     setLlmStatusText(null);
     setLlmHtml(null);
+    setLlmText(null);
+    setTypedText('');
     setLlmCss(null);
     setLlmSections({});
     setLlmSectionOrder([]);
@@ -2604,6 +2715,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     if (!activeJobId) return;
     if (storedWorkspace.source === 'files' || hasStoredFilesResult) return;
     if (savedResultHtml && savedResultHtml.trim()) return;
+    if (isTextMode && savedResultText && savedResultText.trim()) return;
     if (fetchedResultJobIdRef.current === activeJobId) return;
 
     // Если джоба завершена давно (> 2 минут), бэкенд уже удалил её из памяти.
@@ -2653,7 +2765,9 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     applyFinalPayload,
     course.id,
     isActiveJobForLesson,
+    isTextMode,
     savedResultHtml,
+    savedResultText,
     storedWorkspace.source,
     syncProgress,
   ]);
@@ -2667,6 +2781,16 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
       jobStartTimeRef.current = 0;
     }
   }, [activeJobStatus, savedResultHtml, storedWorkspace.source]);
+
+  useEffect(() => {
+    if (!isTextMode) return;
+    if (isSendingPrompt) return;
+    if (!savedResultText || !savedResultText.trim()) {
+      setLlmText(null);
+      return;
+    }
+    setLlmText((current) => (current === savedResultText ? current : savedResultText));
+  }, [isSendingPrompt, isTextMode, savedResultText]);
 
   // Предупреждение при попытке закрыть страницу во время генерации
   useEffect(() => {
@@ -2831,17 +2955,39 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
               {isFullScreen ? <Minimize className="w-5 h-5 group-hover:scale-90 transition-transform" /> : <Maximize className="w-5 h-5 group-hover:scale-110 transition-transform" />}
             </button>
             <div className="flex-1 border-b border-white/5 relative overflow-hidden">
-              {hasRenderablePreview && (
+              {isTextMode ? (
                 <div className="absolute inset-0 flex flex-col">
-                  <iframe
-                    ref={previewIframeRef}
-                    key={`${activeLesson.id}-${uiActiveFile}`}
-                    srcDoc={iframeSrcDoc}
-                    title="LLM Generated Site"
-                    className="w-full flex-1 bg-black"
-                    sandbox="allow-scripts"
-                  />
+                  <div className="flex-1 overflow-y-auto p-6">
+                    {hasRenderableText && (
+                      <div className="animate-in fade-in slide-in-from-bottom-4 duration-700">
+                        <div className="rounded-3xl border border-white/10 bg-white/5 p-6 shadow-2xl backdrop-blur-sm">
+                          <div className="flex items-center gap-2 mb-4">
+                            <span className="text-[9px] uppercase tracking-[0.28em] text-vibe-300 font-bold px-2.5 py-1 rounded-full border border-vibe-500/30 bg-vibe-500/10">
+                              LLM Answer
+                            </span>
+                            <span className="text-[10px] text-slate-500 font-mono">text mode</span>
+                          </div>
+                          <div className="text-sm md:text-base text-slate-200 leading-relaxed whitespace-pre-wrap">
+                            {renderMarkdown(typedText)}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
+              ) : (
+                hasRenderablePreview && (
+                  <div className="absolute inset-0 flex flex-col">
+                    <iframe
+                      ref={previewIframeRef}
+                      key={`${activeLesson.id}-${uiActiveFile}`}
+                      srcDoc={iframeSrcDoc}
+                      title="LLM Generated Site"
+                      className="w-full flex-1 bg-black"
+                      sandbox="allow-scripts"
+                    />
+                  </div>
+                )
               )}
 
               {/* Enhanced Non-blocking Loading Widget */}
@@ -2867,6 +3013,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
                               if (mode === 'create') return 'Создание';
                               if (mode === 'edit') return 'Редактирование';
                               if (mode === 'add_page') return 'Добавление';
+                              if (mode === 'text') return 'Текст';
                               return 'Запрос к vibecoderai';
                             })()}
                           </span>
@@ -2906,7 +3053,18 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
                 </div>
               )}
 
-              {!hasRenderablePreview && !isSendingPrompt && (
+              {!isSendingPrompt && (!hasRenderablePreview && !isTextMode) && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-400 gap-3 p-6 text-center">
+                  <FileText className="w-16 h-16 opacity-20" />
+                  <p className="font-mono text-sm">Waiting for input...</p>
+                  {!isWorkshopLesson && (
+                    <p className="text-xs mt-1 opacity-50">
+                      В этом уроке нет интерактивного задания AI.
+                    </p>
+                  )}
+                </div>
+              )}
+              {!isSendingPrompt && isTextMode && !hasRenderableText && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-400 gap-3 p-6 text-center">
                   <FileText className="w-16 h-16 opacity-20" />
                   <p className="font-mono text-sm">Waiting for input...</p>
@@ -2981,39 +3139,52 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
                     />
 
                     {/* Submit Button */}
-                    <div className="absolute bottom-3 right-3">
+                    <div className="absolute bottom-3 right-3 flex items-center gap-3">
                       {isWorkshopLesson && (
-                        <button
-                          type="button"
-                          onClick={handlePromptSubmit}
-                          disabled={
-                            isSendingPrompt ||
-                            activeLessonContentLoading ||
-                            !activeLessonContent ||
-                            Boolean(activeLessonContentError) ||
-                            (quotaRequired && (courseQuotaLoading || !courseQuota)) ||
-                            (courseQuota?.limit != null && courseQuota.remaining === 0) ||
-                            promptInput.trim().length === 0
-                          }
-                          className={`
+                        <>
+                          {quotaRequired && (
+                            <span className="text-[11px] text-slate-400/80 font-mono">
+                              {courseQuotaLoading
+                                ? 'Проверяем лимит...'
+                                : courseQuotaError
+                                  ? 'Лимит недоступен'
+                                  : !courseQuota
+                                    ? 'Проверяем лимит...'
+                                    : `Осталось запросов: ${courseQuota.remaining ?? 0}`}
+                            </span>
+                          )}
+                          <button
+                            type="button"
+                            onClick={handlePromptSubmit}
+                            disabled={
+                              isSendingPrompt ||
+                              activeLessonContentLoading ||
+                              !activeLessonContent ||
+                              Boolean(activeLessonContentError) ||
+                              (quotaRequired && (courseQuotaLoading || !courseQuota)) ||
+                              (courseQuota?.limit != null && courseQuota.remaining === 0) ||
+                              promptInput.trim().length === 0
+                            }
+                            className={`
                               px-4 py-2 rounded-lg text-[10px] font-bold uppercase tracking-wider flex items-center gap-2 transition-all duration-300
                               ${promptInput.trim().length > 0 && !isSendingPrompt
-                              ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/40 hover:bg-blue-500 hover:scale-105 active:scale-95'
-                              : 'bg-white/5 text-slate-500 border border-white/5 cursor-not-allowed'
-                            }
+                                ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/40 hover:bg-blue-500 hover:scale-105 active:scale-95'
+                                : 'bg-white/5 text-slate-500 border border-white/5 cursor-not-allowed'
+                              }
                             `}
-                        >
-                          {isSendingPrompt ? (
-                            <>
-                              <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                              <span className="opacity-80">Генерация...</span>
-                            </>
-                          ) : (
-                            <>
-                              Создать <Sparkles className={`w-3 h-3 ${promptInput.trim().length > 0 ? 'text-blue-200' : 'text-slate-600'}`} />
-                            </>
-                          )}
-                        </button>
+                          >
+                            {isSendingPrompt ? (
+                              <>
+                                <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                                <span className="opacity-80">Генерация...</span>
+                              </>
+                            ) : (
+                              <>
+                                Создать <Sparkles className={`w-3 h-3 ${promptInput.trim().length > 0 ? 'text-blue-200' : 'text-slate-600'}`} />
+                              </>
+                            )}
+                          </button>
+                        </>
                       )}
                     </div>
                   </div>
