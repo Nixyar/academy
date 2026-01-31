@@ -3115,6 +3115,25 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
                         Prompt Editor
                       </span>
                     </div>
+                    {isWorkshopLesson && quotaRequired && (
+                      <div className="flex items-center gap-2">
+                        <div className={`text-[10px] font-mono px-2 py-0.5 rounded-full border ${courseQuotaLoading ? 'text-slate-400 border-slate-700 bg-slate-800/50' :
+                          courseQuotaError ? 'text-red-400 border-red-500/30 bg-red-500/10' :
+                            !courseQuota ? 'text-slate-400 border-slate-700' :
+                              (courseQuota.remaining ?? 0) === 0 ? 'text-red-400 border-red-500/30 bg-red-500/10' :
+                                'text-blue-300 border-blue-500/30 bg-blue-500/10'
+                          }`}>
+                          {courseQuotaLoading
+                            ? 'Проверяем лимит...'
+                            : courseQuotaError
+                              ? 'Ошибка лимита'
+                              : !courseQuota
+                                ? 'Проверка...'
+                                : `Осталось запросов для курса: ${courseQuota.remaining}`
+                          }
+                        </div>
+                      </div>
+                    )}
 
                   </div>
 
@@ -3139,52 +3158,39 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
                     />
 
                     {/* Submit Button */}
-                    <div className="absolute bottom-3 right-3 flex items-center gap-3">
+                    <div className="absolute bottom-3 right-3">
                       {isWorkshopLesson && (
-                        <>
-                          {quotaRequired && (
-                            <span className="text-[11px] text-slate-400/80 font-mono">
-                              {courseQuotaLoading
-                                ? 'Проверяем лимит...'
-                                : courseQuotaError
-                                  ? 'Лимит недоступен'
-                                  : !courseQuota
-                                    ? 'Проверяем лимит...'
-                                    : `Осталось запросов: ${courseQuota.remaining ?? 0}`}
-                            </span>
-                          )}
-                          <button
-                            type="button"
-                            onClick={handlePromptSubmit}
-                            disabled={
-                              isSendingPrompt ||
-                              activeLessonContentLoading ||
-                              !activeLessonContent ||
-                              Boolean(activeLessonContentError) ||
-                              (quotaRequired && (courseQuotaLoading || !courseQuota)) ||
-                              (courseQuota?.limit != null && courseQuota.remaining === 0) ||
-                              promptInput.trim().length === 0
-                            }
-                            className={`
+                        <button
+                          type="button"
+                          onClick={handlePromptSubmit}
+                          disabled={
+                            isSendingPrompt ||
+                            activeLessonContentLoading ||
+                            !activeLessonContent ||
+                            Boolean(activeLessonContentError) ||
+                            (quotaRequired && (courseQuotaLoading || !courseQuota)) ||
+                            (courseQuota?.limit != null && courseQuota.remaining === 0) ||
+                            promptInput.trim().length === 0
+                          }
+                          className={`
                               px-4 py-2 rounded-lg text-[10px] font-bold uppercase tracking-wider flex items-center gap-2 transition-all duration-300
                               ${promptInput.trim().length > 0 && !isSendingPrompt
-                                ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/40 hover:bg-blue-500 hover:scale-105 active:scale-95'
-                                : 'bg-white/5 text-slate-500 border border-white/5 cursor-not-allowed'
-                              }
+                              ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/40 hover:bg-blue-500 hover:scale-105 active:scale-95'
+                              : 'bg-white/5 text-slate-500 border border-white/5 cursor-not-allowed'
+                            }
                             `}
-                          >
-                            {isSendingPrompt ? (
-                              <>
-                                <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                                <span className="opacity-80">Генерация...</span>
-                              </>
-                            ) : (
-                              <>
-                                Создать <Sparkles className={`w-3 h-3 ${promptInput.trim().length > 0 ? 'text-blue-200' : 'text-slate-600'}`} />
-                              </>
-                            )}
-                          </button>
-                        </>
+                        >
+                          {isSendingPrompt ? (
+                            <>
+                              <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                              <span className="opacity-80">Генерация...</span>
+                            </>
+                          ) : (
+                            <>
+                              Создать <Sparkles className={`w-3 h-3 ${promptInput.trim().length > 0 ? 'text-blue-200' : 'text-slate-600'}`} />
+                            </>
+                          )}
+                        </button>
                       )}
                     </div>
                   </div>
