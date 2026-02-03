@@ -202,7 +202,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, courses, progres
                 const canAccess = canAccessCourse(course);
 
                 return (
-                  <div key={course.id} className="group bg-glass border border-white/5 rounded-2xl overflow-hidden hover:border-vibe-500/30 transition-all hover:-translate-y-1 hover:shadow-2xl hover:shadow-vibe-900/10">
+                  <div key={course.id} className="group bg-glass border border-white/5 rounded-2xl overflow-hidden hover:border-vibe-500/30 transition-all hover:-translate-y-1 hover:shadow-2xl hover:shadow-vibe-900/10 flex flex-col h-full">
                     <div className="h-40 bg-slate-800 relative overflow-hidden">
                       <img src={course.coverUrl || 'https://placehold.co/600x400/0b1120/FFFFFF?text=Course'} alt="" className="w-full h-full object-cover opacity-60 group-hover:opacity-80 transition-opacity duration-500 group-hover:scale-105" />
                       <div className="absolute inset-0 bg-gradient-to-t from-[#030712] via-[#030712]/50 to-transparent"></div>
@@ -223,7 +223,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, courses, progres
                         </div>
                       )}
                     </div>
-                    <div className="p-6">
+                    <div className="p-6 flex flex-col flex-1">
                       <h3 className="font-bold font-display text-xl mb-2 truncate group-hover:text-vibe-400 transition-colors">{course.title}</h3>
                       {course.description ? (
                         <p
@@ -239,45 +239,44 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, courses, progres
                         </p>
                       ) : null}
 
-                      {/* Progress Bar */}
-                      <div className="flex items-center justify-between text-xs text-slate-400 mb-2 font-medium">
-                        <span>Прогресс</span>
-                        <span>{percent}%</span>
-                      </div>
-                      <div className="w-full h-1.5 bg-white/5 rounded-full mb-6 overflow-hidden">
-                        <div
-                          className="h-full bg-gradient-to-r from-vibe-500 to-purple-500 rounded-full transition-all duration-1000 shadow-[0_0_10px_rgba(14,165,233,0.5)]"
-                          style={{ width: `${Math.max(5, percent)}%` }}
-                        ></div>
-                      </div>
+                      <div className="mt-auto">
+                        {/* Progress Bar */}
+                        <div className="flex items-center justify-between text-xs text-slate-400 mb-2 font-medium">
+                          <span>Прогресс</span>
+                          <span>{percent}%</span>
+                        </div>
+                        <div className="w-full h-1.5 bg-white/5 rounded-full mb-6 overflow-hidden">
+                          <div
+                            className="h-full bg-gradient-to-r from-vibe-500 to-purple-500 rounded-full transition-all duration-1000 shadow-[0_0_10px_rgba(14,165,233,0.5)]"
+                            style={{ width: `${Math.max(5, percent)}%` }}
+                          ></div>
+                        </div>
 
-                      {isDraft ? (
-                        <a
-                          href={telegramUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="w-full py-3.5 rounded-xl transition-all flex flex-col items-center justify-center gap-1 font-display bg-gradient-to-r from-sky-500/20 via-sky-500/10 to-purple-500/20 text-white hover:from-sky-500/30 hover:to-purple-500/30 border border-white/10"
-                        >
-                          <span className="text-[11px] uppercase tracking-wide text-white/70">Открытие скоро</span>
-                          <span className="text-sm font-bold flex items-center gap-2">
-                            Следить в Telegram <Send className="w-4 h-4" />
-                          </span>
-                        </a>
-                      ) : (
-                        <button
-                          onClick={canAccess ? () => onContinueCourse(course.id) : () => onPurchaseCourse(course)}
-                          className={`w-full py-3.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all
-                                    ${canAccess
-                              ? isStarted
-                                ? 'bg-white/5 hover:bg-white/10 text-white border border-white/10'
-                                : 'bg-gradient-to-r from-vibe-600 to-purple-600 hover:from-vibe-500 hover:to-purple-500 text-white shadow-lg shadow-vibe-900/20'
-                              : 'bg-gradient-to-r from-vibe-600 to-purple-600 hover:from-vibe-500 hover:to-purple-500 text-white shadow-lg shadow-vibe-900/20'}
-                                `}
-                        >
-                          {canAccess ? (isStarted ? 'Продолжить' : 'Начать курс') : 'Приобрести'}
-                          {canAccess ? (isStarted ? <ChevronRight className="w-4 h-4" /> : <Play className="w-4 h-4 fill-current" />) : null}
-                        </button>
-                      )}
+                        {isDraft ? (
+                          <a
+                            href={telegramUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="w-full py-3.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all font-display bg-gradient-to-r from-slate-800/80 to-purple-900/40 text-slate-200 hover:from-slate-800/90 hover:to-purple-900/60 border border-white/10"
+                          >
+                            Узнать первым в Telegram <Send className="w-4 h-4" />
+                          </a>
+                        ) : (
+                          <button
+                            onClick={canAccess ? () => onContinueCourse(course.id) : () => onPurchaseCourse(course)}
+                            className={`w-full py-3.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all
+                                      ${canAccess
+                                ? isStarted
+                                  ? 'bg-white/5 hover:bg-white/10 text-white border border-white/10'
+                                  : 'bg-gradient-to-r from-vibe-600 to-purple-600 hover:from-vibe-500 hover:to-purple-500 text-white shadow-lg shadow-vibe-900/20'
+                                : 'bg-gradient-to-r from-vibe-600 to-purple-600 hover:from-vibe-500 hover:to-purple-500 text-white shadow-lg shadow-vibe-900/20'}
+                                  `}
+                          >
+                            {canAccess ? (isStarted ? 'Продолжить' : 'Начать курс') : 'Приобрести'}
+                            {canAccess ? (isStarted ? <ChevronRight className="w-4 h-4" /> : <Play className="w-4 h-4 fill-current" />) : null}
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </div>
                 )
@@ -300,7 +299,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, courses, progres
                 const canAccess = canAccessCourse(course);
 
                 return (
-                  <div key={course.id} className="group bg-glass border border-white/5 rounded-2xl overflow-hidden hover:border-vibe-500/30 transition-all hover:-translate-y-1 hover:shadow-2xl hover:shadow-vibe-900/10">
+                  <div key={course.id} className="group bg-glass border border-white/5 rounded-2xl overflow-hidden hover:border-vibe-500/30 transition-all hover:-translate-y-1 hover:shadow-2xl hover:shadow-vibe-900/10 flex flex-col h-full">
                     <div className="h-40 bg-slate-800 relative overflow-hidden">
                       <img src={course.coverUrl || 'https://placehold.co/600x400/0b1120/FFFFFF?text=Course'} alt="" className="w-full h-full object-cover opacity-60 group-hover:opacity-80 transition-opacity duration-500 group-hover:scale-105" />
                       <div className="absolute inset-0 bg-gradient-to-t from-[#030712] via-[#030712]/50 to-transparent"></div>
@@ -321,7 +320,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, courses, progres
                         </div>
                       )}
                     </div>
-                    <div className="p-6">
+                    <div className="p-6 flex flex-col flex-1">
                       <h3 className="font-bold font-display text-xl mb-2 truncate group-hover:text-vibe-400 transition-colors">{course.title}</h3>
                       {course.description ? (
                         <p
@@ -342,17 +341,14 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, courses, progres
                           href={telegramUrl}
                           target="_blank"
                           rel="noreferrer"
-                          className="w-full py-3.5 rounded-xl transition-all flex flex-col items-center justify-center gap-1 font-display bg-gradient-to-r from-sky-500/20 via-sky-500/10 to-purple-500/20 text-white hover:from-sky-500/30 hover:to-purple-500/30 border border-white/10"
+                          className="w-full py-3.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all font-display bg-gradient-to-r from-slate-800/80 to-purple-900/40 text-slate-200 hover:from-slate-800/90 hover:to-purple-900/60 border border-white/10 mt-auto"
                         >
-                          <span className="text-[11px] uppercase tracking-wide text-white/70">Открытие скоро</span>
-                          <span className="text-sm font-bold flex items-center gap-2">
-                            Следить в Telegram <Send className="w-4 h-4" />
-                          </span>
+                          Узнать первым в Telegram <Send className="w-4 h-4" />
                         </a>
                       ) : (
                         <button
                           onClick={canAccess ? () => onContinueCourse(course.id) : () => onPurchaseCourse(course)}
-                          className="w-full py-3.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all bg-gradient-to-r from-vibe-600 to-purple-600 hover:from-vibe-500 hover:to-purple-500 text-white shadow-lg shadow-vibe-900/20"
+                          className="w-full py-3.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all bg-gradient-to-r from-vibe-600 to-purple-600 hover:from-vibe-500 hover:to-purple-500 text-white shadow-lg shadow-vibe-900/20 mt-auto"
                         >
                           {canAccess ? 'Начать курс' : 'Приобрести'}
                           {canAccess ? <Play className="w-4 h-4 fill-current" /> : null}
