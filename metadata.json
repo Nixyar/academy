@@ -1,8 +1,4 @@
 {
   "name": "VibeCoderAi",
-  "description": "Платформа обучения вайб-кодингу с ИИ. Создавайте приложения силой мысли.",
-  "requestFramePermissions": [
-    "camera",
-    "microphone"
-  ]
+  "description": "Платформа обучения вайб-кодингу с ИИ. Создавайте приложения силой мысли."
 }

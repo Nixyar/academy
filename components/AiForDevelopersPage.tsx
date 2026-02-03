@@ -233,7 +233,7 @@ export const AiForDevelopersPage: React.FC = () => {
                 </a>{' '}
                 — метод и процесс
               </p>
-              <p>AI — инструмент, а не автор решений</p>
+              <p>AI — инструмент, а не замена</p>
               <p>Вместе это даёт:</p>
               <ul className="list-disc list-inside space-y-2 text-slate-200">
                 <li>скорость без потери качества</li>
@@ -267,6 +267,9 @@ export const AiForDevelopersPage: React.FC = () => {
               >
                 Попробовать вайбкодинг на практике (бесплатно)
               </a>
+              <p className="text-sm text-slate-500">
+                Подойдёт, если вы хотите попробовать метод без обязательств.
+              </p>
             </div>
           </section>
 

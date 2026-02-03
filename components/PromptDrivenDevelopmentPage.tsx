@@ -39,6 +39,21 @@ export const PromptDrivenDevelopmentPage: React.FC = () => {
             <div className="rounded-2xl border border-white/10 bg-white/5 p-6 sm:p-8 text-lg text-slate-100 font-medium leading-relaxed">
               Prompt-Driven Development — это метод работы с AI, при котором задача решается через цепочку осмысленных запросов с управлением контекстом, ограничениями и качеством результата.
             </div>
+            <div className="mt-4 space-y-3 text-slate-300 leading-relaxed">
+              <p>
+                Prompt-Driven Development особенно важен в эпоху LLM, потому что современные модели не понимают цели и контекст без явного управления. Метод позволяет превратить AI из генератора ответов в управляемый инструмент разработки.
+              </p>
+              <p>
+                Этот метод является практической основой{' '}
+                <a
+                  href="/vibe-coding"
+                  className="text-vibe-400 hover:text-vibe-300 transition-colors font-semibold"
+                >
+                  вайбкодинга
+                </a>
+                .
+              </p>
+            </div>
           </section>
 
           <section className="mb-12 sm:mb-16">
