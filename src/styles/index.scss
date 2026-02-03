@@ -1233,16 +1233,40 @@ a {
   &__links {
     display: flex;
     justify-content: center;
+    align-items: center;
     gap: 18px;
 
+    a,
     span {
       cursor: pointer;
       transition: color 0.15s ease;
+      color: inherit;
+      text-decoration: none;
     }
 
+    a:hover,
     span:hover {
       color: var(--text);
     }
+  }
+
+  &__social {
+    width: 30px;
+    height: 30px;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border);
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--muted);
+    transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+  }
+
+  &__social:hover {
+    border-color: rgba(255, 255, 255, 0.2);
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text);
   }
 
   &__copy {

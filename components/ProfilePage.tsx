@@ -1,6 +1,6 @@
 import React from 'react';
 import { User, Course } from '../types';
-import { Zap, Crown, BookOpen, Clock, LogOut, ChevronRight, Play, Sparkles } from 'lucide-react';
+import { Zap, Crown, BookOpen, Clock, LogOut, ChevronRight, Play, Send, Sparkles } from 'lucide-react';
 
 interface ProfilePageProps {
   user: User;
@@ -14,6 +14,7 @@ interface ProfilePageProps {
 }
 
 export const ProfilePage: React.FC<ProfilePageProps> = ({ user, courses, progressLoaded, purchasedCourseIds, onLogout, onContinueCourse, onPurchaseCourse, onSubscribe }) => {
+  const telegramUrl = 'https://t.me/vibecoderai';
 
   const getCourseProgressState = (courseId: string) => {
     const progress = user.progress?.[courseId];
@@ -250,22 +251,33 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, courses, progres
                         ></div>
                       </div>
 
-                      <button
-                        onClick={isDraft ? undefined : canAccess ? () => onContinueCourse(course.id) : () => onPurchaseCourse(course)}
-                        disabled={isDraft}
-                        className={`w-full py-3.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all
-                                    ${isDraft
-                            ? 'bg-white/5 text-slate-500 border border-white/10 cursor-not-allowed opacity-70'
-                            : canAccess
+                      {isDraft ? (
+                        <a
+                          href={telegramUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="w-full py-3.5 rounded-xl transition-all flex flex-col items-center justify-center gap-1 font-display bg-gradient-to-r from-sky-500/20 via-sky-500/10 to-purple-500/20 text-white hover:from-sky-500/30 hover:to-purple-500/30 border border-white/10"
+                        >
+                          <span className="text-[11px] uppercase tracking-wide text-white/70">Открытие скоро</span>
+                          <span className="text-sm font-bold flex items-center gap-2">
+                            Следить в Telegram <Send className="w-4 h-4" />
+                          </span>
+                        </a>
+                      ) : (
+                        <button
+                          onClick={canAccess ? () => onContinueCourse(course.id) : () => onPurchaseCourse(course)}
+                          className={`w-full py-3.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all
+                                    ${canAccess
                               ? isStarted
                                 ? 'bg-white/5 hover:bg-white/10 text-white border border-white/10'
                                 : 'bg-gradient-to-r from-vibe-600 to-purple-600 hover:from-vibe-500 hover:to-purple-500 text-white shadow-lg shadow-vibe-900/20'
                               : 'bg-gradient-to-r from-vibe-600 to-purple-600 hover:from-vibe-500 hover:to-purple-500 text-white shadow-lg shadow-vibe-900/20'}
                                 `}
-                      >
-                        {isDraft ? 'Скоро' : canAccess ? (isStarted ? 'Продолжить' : 'Начать курс') : 'Приобрести'}
-                        {isDraft ? null : canAccess ? (isStarted ? <ChevronRight className="w-4 h-4" /> : <Play className="w-4 h-4 fill-current" />) : null}
-                      </button>
+                        >
+                          {canAccess ? (isStarted ? 'Продолжить' : 'Начать курс') : 'Приобрести'}
+                          {canAccess ? (isStarted ? <ChevronRight className="w-4 h-4" /> : <Play className="w-4 h-4 fill-current" />) : null}
+                        </button>
+                      )}
                     </div>
                   </div>
                 )
@@ -325,18 +337,27 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, courses, progres
                         </p>
                       ) : null}
 
-                      <button
-                        onClick={isDraft ? undefined : canAccess ? () => onContinueCourse(course.id) : () => onPurchaseCourse(course)}
-                        disabled={isDraft}
-                        className={`w-full py-3.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all
-                          ${isDraft
-                            ? 'bg-white/5 text-slate-500 border border-white/10 cursor-not-allowed opacity-70'
-                            : 'bg-gradient-to-r from-vibe-600 to-purple-600 hover:from-vibe-500 hover:to-purple-500 text-white shadow-lg shadow-vibe-900/20'}
-                        `}
-                      >
-                        {isDraft ? 'Скоро' : canAccess ? 'Начать курс' : 'Приобрести'}
-                        {isDraft ? null : canAccess ? <Play className="w-4 h-4 fill-current" /> : null}
-                      </button>
+                      {isDraft ? (
+                        <a
+                          href={telegramUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="w-full py-3.5 rounded-xl transition-all flex flex-col items-center justify-center gap-1 font-display bg-gradient-to-r from-sky-500/20 via-sky-500/10 to-purple-500/20 text-white hover:from-sky-500/30 hover:to-purple-500/30 border border-white/10"
+                        >
+                          <span className="text-[11px] uppercase tracking-wide text-white/70">Открытие скоро</span>
+                          <span className="text-sm font-bold flex items-center gap-2">
+                            Следить в Telegram <Send className="w-4 h-4" />
+                          </span>
+                        </a>
+                      ) : (
+                        <button
+                          onClick={canAccess ? () => onContinueCourse(course.id) : () => onPurchaseCourse(course)}
+                          className="w-full py-3.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all bg-gradient-to-r from-vibe-600 to-purple-600 hover:from-vibe-500 hover:to-purple-500 text-white shadow-lg shadow-vibe-900/20"
+                        >
+                          {canAccess ? 'Начать курс' : 'Приобрести'}
+                          {canAccess ? <Play className="w-4 h-4 fill-current" /> : null}
+                        </button>
+                      )}
                     </div>
                   </div>
                 )

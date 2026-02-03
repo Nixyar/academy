@@ -1,6 +1,6 @@
 import React from 'react';
 import { Course, User } from '../types';
-import { Code, Rocket, Sparkles, Terminal } from 'lucide-react';
+import { Code, Rocket, Send, Sparkles, Terminal } from 'lucide-react';
 import { CoursesSlider } from './CoursesSlider';
 
 interface LandingPageProps {
@@ -320,18 +320,31 @@ export const LandingPage: React.FC<LandingPageProps> = ({
 
       <footer className="py-12 border-t border-white/5 bg-[#02050e]">
         <div className="max-w-7xl mx-auto px-4 text-center">
-          <div className="text-slate-600 text-sm mt-2 flex flex-col sm:flex-row items-center justify-center gap-2 sm:gap-6">
-            <a href="/offer.pdf" target="_blank" rel="noopener noreferrer" className="hover:text-slate-400 transition-colors">
-              Публичная оферта
-            </a>
-            <a href="/agreement.pdf" target="_blank" rel="noopener noreferrer" className="hover:text-slate-400 transition-colors">
-              Пользовательское соглашение
-            </a>
-            <a href="/privacy.pdf" target="_blank" rel="noopener noreferrer" className="hover:text-slate-400 transition-colors">
-              Политика конфиденциальности
-            </a>
+          <div className="mt-2 flex flex-col items-center gap-4 text-sm text-slate-500">
+            <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-6">
+              <a href="/offer.pdf" target="_blank" rel="noopener noreferrer" className="hover:text-slate-300 transition-colors">
+                Публичная оферта
+              </a>
+              <a href="/agreement.pdf" target="_blank" rel="noopener noreferrer" className="hover:text-slate-300 transition-colors">
+                Пользовательское соглашение
+              </a>
+              <a href="/privacy.pdf" target="_blank" rel="noopener noreferrer" className="hover:text-slate-300 transition-colors">
+                Политика конфиденциальности
+              </a>
+            </div>
+            <div className="flex items-center gap-3">
+              <a
+                href="https://t.me/vibecoderai"
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-slate-300 hover:text-white hover:border-white/20 hover:bg-white/10 transition-colors"
+              >
+                <Send className="w-4 h-4" />
+                <span className="text-sm font-medium">Telegram</span>
+              </a>
+            </div>
           </div>
-          <p className="text-slate-600 text-sm mt-2">© 2025-2026 VibeCoderAi</p>
+          <p className="text-slate-600 text-sm mt-3">© 2025-2026 VibeCoderAi</p>
         </div>
       </footer>
     </div>
