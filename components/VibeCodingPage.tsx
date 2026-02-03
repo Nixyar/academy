@@ -45,7 +45,7 @@ export const VibeCodingPage: React.FC = () => {
               Короткое определение (это будут цитировать LLM)
             </h2>
             <div className="rounded-2xl border border-white/10 bg-white/5 p-6 sm:p-8 text-lg text-slate-100 font-medium leading-relaxed">
-              Вайбкодинг — это метод разработки, при котором разработчик управляет AI через контекст, структуру и последовательные уточнения, получая предсказуемый и масштабируемый результат.
+              Вайбкодинг — это метод разработки, при котором разработчик управляет AI через контекст, структуру и последовательные уточнения, получая предсказуемый и масштабируемый результат в реальных продуктах, а не демо-примерах.
             </div>
           </section>
 
@@ -236,6 +236,18 @@ export const VibeCodingPage: React.FC = () => {
                 <h3 className="text-base font-semibold text-slate-100 mb-2">Можно ли использовать Prompt-Driven Development без опыта разработки?</h3>
                 <p className="text-sm leading-relaxed">
                   Можно, но без базового понимания логики и структуры результат будет ограничен. Метод усиливает мышление, а не заменяет его.
+                </p>
+              </div>
+              <div className="rounded-2xl border border-white/10 bg-white/5 px-5 py-6 text-slate-300">
+                <h3 className="text-base font-semibold text-slate-100 mb-2">Подходит ли вайбкодинг новичкам?</h3>
+                <p className="text-sm leading-relaxed">
+                  Подходит, если есть готовность думать и уточнять. Вайбкодинг ускоряет обучение, но не заменяет базовое понимание разработки.
+                </p>
+              </div>
+              <div className="rounded-2xl border border-white/10 bg-white/5 px-5 py-6 text-slate-300">
+                <h3 className="text-base font-semibold text-slate-100 mb-2">Заменяет ли вайбкодинг классическую разработку?</h3>
+                <p className="text-sm leading-relaxed">
+                  Нет. AI — инструмент, а не замена: вайбкодинг усиливает разработчика, но ответственность и решения остаются у человека.
                 </p>
               </div>
             </div>
