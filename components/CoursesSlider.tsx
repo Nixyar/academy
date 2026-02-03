@@ -137,18 +137,15 @@ export const CoursesSlider: React.FC<CoursesSliderProps> = ({
                       href={telegramUrl}
                       target="_blank"
                       rel="noreferrer"
-                      className="w-full py-3.5 rounded-xl transition-all flex flex-col items-center justify-center gap-1.5 font-display bg-gradient-to-r from-sky-500/20 via-sky-500/10 to-purple-500/20 text-white hover:from-sky-500/30 hover:to-purple-500/30 border border-white/10"
+                      className="w-full py-4 rounded-xl font-bold transition-all flex items-center justify-center gap-2 font-display bg-gradient-to-r from-slate-800/80 to-purple-900/40 text-slate-200 hover:from-slate-800/90 hover:to-purple-900/60 border border-white/10 mt-auto"
                     >
-                      <span className="text-xs uppercase tracking-wide text-white/70">Открытие скоро</span>
-                      <span className="text-base font-bold flex items-center gap-2">
-                        Следить в Telegram <Send className="w-4 h-4" />
-                      </span>
+                      Узнать первым в Telegram <Send className="w-4 h-4" />
                     </a>
                   ) : (
                     <button
                       type="button"
                       onClick={() => onSelectCourse(course.id)}
-                      className={`w-full py-4 rounded-xl font-bold transition-all flex items-center justify-center gap-2 font-display
+                      className={`w-full py-4 rounded-xl font-bold transition-all flex items-center justify-center gap-2 font-display mt-auto
                         ${course.isFree || isSubscribed
                           ? 'bg-white text-void hover:bg-slate-200'
                           : 'bg-white/5 text-slate-500 cursor-not-allowed'

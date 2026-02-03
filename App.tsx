@@ -17,8 +17,11 @@ import { syncTbankCoursePurchase } from './services/paymentsApi';
 import { fetchPurchasedCourseIds } from './services/purchasesApi';
 import { ApiError } from './services/apiClient';
 import { getRouteSeo } from './src/seo/useRouteSeo';
+import { VibeCodingPage } from './components/VibeCodingPage';
+import { PromptDrivenDevelopmentPage } from './components/PromptDrivenDevelopmentPage';
+import { AiForDevelopersPage } from './components/AiForDevelopersPage';
 
-type View = 'landing' | 'course' | 'profile';
+type View = 'landing' | 'course' | 'profile' | 'vibe-coding' | 'prompt-driven-development' | 'ai-for-developers';
 
 type RouteState = {
   view: View;
@@ -41,6 +44,18 @@ const parseRouteFromLocation = (): RouteState => {
     return { view: 'profile', courseSlug: null };
   }
 
+  if (segments[0] === 'vibe-coding') {
+    return { view: 'vibe-coding', courseSlug: null };
+  }
+
+  if (segments[0] === 'prompt-driven-development') {
+    return { view: 'prompt-driven-development', courseSlug: null };
+  }
+
+  if (segments[0] === 'ai-for-developers') {
+    return { view: 'ai-for-developers', courseSlug: null };
+  }
+
   if (segments[0] === 'courses') {
     const slug = segments[1] ? decodeURIComponent(segments[1]) : null;
     if (!slug) return { view: 'landing', courseSlug: null, landingPath: '/courses' };
@@ -52,6 +67,9 @@ const parseRouteFromLocation = (): RouteState => {
 
 const routeToPath = (route: RouteState): string => {
   if (route.view === 'profile') return '/profile';
+  if (route.view === 'vibe-coding') return '/vibe-coding';
+  if (route.view === 'prompt-driven-development') return '/prompt-driven-development';
+  if (route.view === 'ai-for-developers') return '/ai-for-developers';
   if (route.view === 'course' && route.courseSlug) {
     return `/courses/${encodeURIComponent(route.courseSlug)}`;
   }
@@ -532,6 +550,24 @@ const App: React.FC = () => {
       return;
     }
 
+    if (route.view === 'vibe-coding') {
+      setCurrentView('vibe-coding');
+      setSelectedCourseId(null);
+      return;
+    }
+
+    if (route.view === 'prompt-driven-development') {
+      setCurrentView('prompt-driven-development');
+      setSelectedCourseId(null);
+      return;
+    }
+
+    if (route.view === 'ai-for-developers') {
+      setCurrentView('ai-for-developers');
+      setSelectedCourseId(null);
+      return;
+    }
+
     setCurrentView('landing');
     setSelectedCourseId(null);
   }, [route, pendingCourseSlug, user, hasFetchedProfile, bootstrapping, courses, resolveCourseBySlug]);
@@ -796,6 +832,18 @@ const App: React.FC = () => {
           onOpenAuth={handleOpenAuth}
           onGoToProfile={navigateToProfile}
         />
+      )}
+
+      {currentView === 'vibe-coding' && (
+        <VibeCodingPage />
+      )}
+
+      {currentView === 'prompt-driven-development' && (
+        <PromptDrivenDevelopmentPage />
+      )}
+
+      {currentView === 'ai-for-developers' && (
+        <AiForDevelopersPage />
       )}
 
       {currentView === 'profile' && user && (
