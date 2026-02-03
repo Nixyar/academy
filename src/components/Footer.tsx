@@ -1,5 +1,5 @@
 import React from 'react';
-import { Code2 } from 'lucide-react';
+import { Code2, Send } from 'lucide-react';
 
 export const Footer: React.FC = () => (
   <footer className="footer">
@@ -13,6 +13,16 @@ export const Footer: React.FC = () => (
       <div className="footer__links">
         <span>AI Политика</span>
         <span>Условия</span>
+        <a
+          className="footer__social"
+          href="https://t.me/vibecoderai"
+          target="_blank"
+          rel="noreferrer"
+          aria-label="Telegram"
+          title="Telegram"
+        >
+          <Send size={16} />
+        </a>
         <span>Сообщество</span>
       </div>
       <p className="footer__copy">© 2024 VibeCoderAI. Будущее кода здесь.</p>
