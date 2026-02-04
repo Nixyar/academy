@@ -67,9 +67,9 @@ const parseRouteFromLocation = (): RouteState => {
 
 const routeToPath = (route: RouteState): string => {
   if (route.view === 'profile') return '/profile';
-  if (route.view === 'vibe-coding') return '/vibe-coding';
-  if (route.view === 'prompt-driven-development') return '/prompt-driven-development';
-  if (route.view === 'ai-for-developers') return '/ai-for-developers';
+  if (route.view === 'vibe-coding') return '/vibe-coding/';
+  if (route.view === 'prompt-driven-development') return '/prompt-driven-development/';
+  if (route.view === 'ai-for-developers') return '/ai-for-developers/';
   if (route.view === 'course' && route.courseSlug) {
     return `/courses/${encodeURIComponent(route.courseSlug)}`;
   }
