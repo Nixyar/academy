@@ -46,7 +46,7 @@ export const PromptDrivenDevelopmentPage: React.FC = () => {
               <p>
                 Этот метод является практической основой{' '}
                 <a
-                  href="/vibe-coding"
+                  href="/vibe-coding/"
                   className="text-vibe-400 hover:text-vibe-300 transition-colors font-semibold"
                 >
                   вайбкодинга
@@ -219,7 +219,7 @@ export const PromptDrivenDevelopmentPage: React.FC = () => {
               <p className="text-slate-200 font-medium">
                 → перейти к странице{' '}
                 <a
-                  href="/ai-for-developers"
+                  href="/ai-for-developers/"
                   className="text-vibe-400 hover:text-vibe-300 transition-colors font-semibold"
                 >
                   Где AI реально помогает разработчикам, а где ломает мышление
@@ -229,14 +229,14 @@ export const PromptDrivenDevelopmentPage: React.FC = () => {
                 Этот этап важен, чтобы понять границы и риски работы с AI.
               </div>
               <a
-                href="/ai-for-developers"
+                href="/ai-for-developers/"
                 className="inline-flex items-center justify-center gap-2 rounded-xl px-6 py-3 font-semibold bg-gradient-to-r from-vibe-600 to-purple-600 hover:from-vibe-500 hover:to-purple-500 text-white shadow-lg shadow-vibe-900/20 transition-colors w-full sm:w-auto"
               >
                 Где AI помогает разработчикам →
               </a>
               <div className="pt-3 border-t border-white/10">
                 <a
-                  href="/vibe-coding"
+                  href="/vibe-coding/"
                   className="inline-flex items-center gap-2 text-slate-400 hover:text-slate-200 transition-colors text-sm"
                 >
                   <ArrowLeft className="w-4 h-4" /> Назад на страницу вайбкодинга

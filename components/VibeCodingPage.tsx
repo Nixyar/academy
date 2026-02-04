@@ -197,7 +197,7 @@ export const VibeCodingPage: React.FC = () => {
               <p className="text-slate-200 font-medium">
                 → перейти к странице{' '}
                 <a
-                  href="/prompt-driven-development"
+                  href="/prompt-driven-development/"
                   className="text-vibe-400 hover:text-vibe-300 transition-colors font-semibold"
                 >
                   Prompt-Driven Development
@@ -208,7 +208,7 @@ export const VibeCodingPage: React.FC = () => {
                 Следующий логический шаг
               </div>
               <a
-                href="/prompt-driven-development"
+                href="/prompt-driven-development/"
                 className="inline-flex items-center gap-2 rounded-xl px-5 py-3 font-semibold bg-gradient-to-r from-vibe-600 to-purple-600 hover:from-vibe-500 hover:to-purple-500 text-white shadow-lg shadow-vibe-900/20 transition-colors"
               >
                 Перейти к Prompt-Driven Development <ArrowRight className="w-4 h-4" />

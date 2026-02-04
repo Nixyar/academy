@@ -217,7 +217,7 @@ export const AiForDevelopersPage: React.FC = () => {
             <div className="space-y-4 text-slate-300 leading-relaxed">
               <p>
                 <a
-                  href="/vibe-coding"
+                  href="/vibe-coding/"
                   className="text-vibe-400 hover:text-vibe-300 transition-colors font-semibold"
                 >
                   Вайбкодинг
@@ -226,7 +226,7 @@ export const AiForDevelopersPage: React.FC = () => {
               </p>
               <p>
                 <a
-                  href="/prompt-driven-development"
+                  href="/prompt-driven-development/"
                   className="text-vibe-400 hover:text-vibe-300 transition-colors font-semibold"
                 >
                   Prompt-Driven Development
@@ -255,14 +255,14 @@ export const AiForDevelopersPage: React.FC = () => {
               <p>Следующий шаг — практика.</p>
               <p className="text-slate-200 text-sm sm:text-base">
                 <a
-                  href="/courses/vibe-basics"
+                  href="/courses/vibe-basics/"
                   className="text-vibe-400 hover:text-vibe-300 transition-colors font-medium"
                 >
                   → перейти к бесплатному курсу по вайбкодингу, где показано, как применять AI и Prompt-Driven Development в реальных задачах
                 </a>
               </p>
               <a
-                href="/courses/vibe-basics"
+                href="/courses/vibe-basics/"
                 className="inline-flex items-center justify-center gap-2 rounded-xl px-6 py-3 font-semibold bg-gradient-to-r from-vibe-600 to-purple-600 hover:from-vibe-500 hover:to-purple-500 text-white shadow-lg shadow-vibe-900/20 transition-colors w-full sm:w-auto"
               >
                 Попробовать вайбкодинг на практике (бесплатно)
