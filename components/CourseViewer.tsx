@@ -437,6 +437,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
   const lastLessonIdRef = useRef<string>(course.lessons[activeLessonIndex]?.id ?? '');
   const fetchedResultJobIdRef = useRef<string | null>(null);
   const previewIframeRef = useRef<HTMLIFrameElement | null>(null);
+  const autoRetryJobIdsRef = useRef<Set<string>>(new Set());
   const rawActiveJob = (courseProgress as any)?.active_job;
   const rawActiveJobStatus =
     (courseProgress as any)?.active_job_status ??
@@ -2349,6 +2350,22 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
           }
 
           if (status && status !== 'running' && status !== 'queued') {
+            const error =
+              active && typeof active === 'object' && typeof (active as any).error === 'string'
+                ? (active as any).error
+                : null;
+            if (status === 'failed' && error === 'STALE_HEARTBEAT' && jobId && !autoRetryJobIdsRef.current.has(jobId)) {
+              autoRetryJobIdsRef.current.add(jobId);
+              setLlmStatusText('Генерация зависла. Перезапускаем...');
+              handlePromptSubmit({
+                prompt: (active as any)?.prompt || activeJobPrompt || promptInput,
+                retryOfJobId: jobId,
+                allowWhileSending: true,
+                isAutoRetry: true,
+              });
+              window.clearInterval(interval);
+              return;
+            }
             const refreshed = await fetchCourseProgress(course.id, { skipCache: true });
             if (cancelled) return;
             syncProgress(refreshed ?? {});
@@ -2377,7 +2394,17 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
       window.clearInterval(interval);
       progressPollActiveRef.current = false;
     };
-  }, [activeJobId, activeJobStatus, course.id, isActiveJobForLesson, isSendingPrompt, syncProgress]);
+  }, [
+    activeJobId,
+    activeJobStatus,
+    activeJobPrompt,
+    course.id,
+    handlePromptSubmit,
+    isActiveJobForLesson,
+    isSendingPrompt,
+    promptInput,
+    syncProgress,
+  ]);
 
   // Prefer polling the in-memory job result (gives partial sections/CSS) to show live progress after refresh.
   // If the backend instance doesn't have the job (JOB_NOT_FOUND), the progress-status poller above will still work.
@@ -2534,9 +2561,11 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     return () => window.clearInterval(interval);
   }, [applyFinalPayload, cleanupStream, isSendingPrompt]);
 
-  const handlePromptSubmit = useCallback(async () => {
-    const prompt = promptInput.trim();
-    if (!prompt || isSendingPrompt) return;
+  const handlePromptSubmit = useCallback(async (options?: { prompt?: string; retryOfJobId?: string; allowWhileSending?: boolean; isAutoRetry?: boolean }) => {
+    const prompt = (options?.prompt ?? promptInput).trim();
+    const allowWhileSending = options?.allowWhileSending === true;
+    const isAutoRetry = options?.isAutoRetry === true;
+    if (!prompt || (isSendingPrompt && !allowWhileSending)) return;
     if (!activeLessonContent) {
       setLlmError(
         activeLessonContentError
@@ -2544,19 +2573,21 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
       );
       return;
     }
-    if (quotaRequired && (courseQuotaLoading || !courseQuota)) {
-      setLlmError(courseQuotaError || GENERIC_RELOAD_ERROR);
-      return;
-    }
-    if (courseQuota?.limit != null && courseQuota.remaining === 0) {
-      setLlmError('Лимит запросов для этого курса исчерпан.');
-      return;
+    if (!isAutoRetry) {
+      if (quotaRequired && (courseQuotaLoading || !courseQuota)) {
+        setLlmError(courseQuotaError || GENERIC_RELOAD_ERROR);
+        return;
+      }
+      if (courseQuota?.limit != null && courseQuota.remaining === 0) {
+        setLlmError('Лимит запросов для этого курса исчерпан.');
+        return;
+      }
     }
 
     cleanupStream();
     setIsSendingPrompt(true);
     setLlmError(null);
-    setLlmStatusText(null);
+    setLlmStatusText(isAutoRetry ? 'Перезапускаем генерацию...' : null);
     setLlmHtml(null);
     setLlmText(null);
     setTypedText('');
@@ -2595,7 +2626,13 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
         '/api/v1/html/start',
         {
           method: 'POST',
-          body: JSON.stringify({ prompt, lessonId: activeLesson.id, mode: requestedMode, courseId: course.id }),
+          body: JSON.stringify({
+            prompt,
+            lessonId: activeLesson.id,
+            mode: requestedMode,
+            courseId: course.id,
+            retryOfJobId: options?.retryOfJobId,
+          }),
         },
       );
 
@@ -2683,6 +2720,7 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     courseQuotaLoading,
     isSendingPrompt,
     promptInput,
+    activeJobPrompt,
     promptRetryCount,
     quotaRequired,
     startHtmlStream,
