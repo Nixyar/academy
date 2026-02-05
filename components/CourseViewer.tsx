@@ -2310,6 +2310,173 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
     [],
   );
 
+  const handlePromptSubmit = useCallback(async (options?: { prompt?: string; retryOfJobId?: string; allowWhileSending?: boolean; isAutoRetry?: boolean }) => {
+    const prompt = (options?.prompt ?? promptInput).trim();
+    const allowWhileSending = options?.allowWhileSending === true;
+    const isAutoRetry = options?.isAutoRetry === true;
+    if (!prompt || (isSendingPrompt && !allowWhileSending)) return;
+    if (!activeLessonContent) {
+      setLlmError(
+        activeLessonContentError
+        || 'Контент урока ещё загружается. Подождите пару секунд и попробуйте снова.',
+      );
+      return;
+    }
+    if (!isAutoRetry) {
+      if (quotaRequired && (courseQuotaLoading || !courseQuota)) {
+        setLlmError(courseQuotaError || GENERIC_RELOAD_ERROR);
+        return;
+      }
+      if (courseQuota?.limit != null && courseQuota.remaining === 0) {
+        setLlmError('Лимит запросов для этого курса исчерпан.');
+        return;
+      }
+    }
+
+    cleanupStream();
+    setIsSendingPrompt(true);
+    setLlmError(null);
+    setLlmStatusText(isAutoRetry ? 'Перезапускаем генерацию...' : null);
+    setLlmHtml(null);
+    setLlmText(null);
+    setTypedText('');
+    setLlmCss(null);
+    setLlmSections({});
+    setLlmSectionOrder([]);
+    llmOutlineRef.current = null;
+
+    // Only reset retry count if this is a fresh user-initiated submit (not a retry)
+    if (promptRetryCount === 0) {
+      // Fresh submit - counter already at 0
+    }
+
+    // Re-fetch lesson content without ETag before starting, to avoid stale cached settings (mode).
+    let requestedMode = activeLessonMode;
+    try {
+      const fresh = await fetchLessonContent(activeLesson.id, { bypassCache: true });
+      setActiveLessonContent(fresh);
+      requestedMode = getLessonMode({ ...activeLesson, ...(fresh ?? {}) });
+    } catch (error) {
+      console.warn('Failed to refresh lesson content before start', error);
+    }
+
+    if (requestedMode === 'create') {
+      setUiActiveFile('index.html');
+    }
+
+    try {
+      await applyProgressPatch({
+        op: 'lesson_prompt',
+        lessonId: activeLesson.id,
+        prompt,
+      });
+
+      const response = await apiFetch<{ jobId?: string; outline?: unknown; quota?: CourseQuota }>(
+        '/api/v1/html/start',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            prompt,
+            lessonId: activeLesson.id,
+            mode: requestedMode,
+            courseId: course.id,
+            retryOfJobId: options?.retryOfJobId,
+          }),
+        },
+      );
+
+      if (response && typeof response === 'object' && typeof (response as any).error === 'string') {
+        throw new Error((response as any).error);
+      }
+
+      if (!response?.jobId) {
+        throw new Error('Сервер не вернул идентификатор задачи генерации.');
+      }
+
+      // Optimistic: mark the job as queued immediately so the loader stays visible
+      // even if the SSE connection can't be established (common after refresh).
+      {
+        const now = new Date().toISOString();
+        jobStartTimeRef.current = Date.now(); // Track start time for progress display
+        const next: CourseProgress = {
+          ...(courseProgressRef.current ?? {}),
+          active_job: {
+            jobId: response.jobId,
+            status: 'queued',
+            lessonId: activeLesson.id,
+            courseId: course.id,
+            prompt,
+            mode: requestedMode,
+            startedAt: now,
+            updatedAt: now,
+          } as any,
+        };
+        courseProgressRef.current = next;
+        setCourseProgress(next);
+        onProgressChange?.(course.id, next);
+      }
+
+      setLlmOutline(response.outline ?? null);
+      if (response.quota && typeof response.quota === 'object') {
+        setCourseQuota(response.quota);
+      }
+      // Removed redundant fetchCourseProgress(course.id) here to prevent "running" -> "queued" flicker
+      // which was causing the streaming effect to abort and restart unnecessarily.
+      startHtmlStream(response.jobId);
+      setPromptRetryCount(0); // Reset retry counter on success
+    } catch (error) {
+      const apiDetails = error instanceof ApiError
+        ? { status: error.status, body: error.body }
+        : null;
+      console.error('Failed to send prompt to LLM', { error, apiDetails });
+
+      // Auto-retry on temporary errors (network, timeout, 5xx)
+      const isRetryableError =
+        error instanceof ApiError
+          ? error.status >= 500 || error.status === 408 || error.status === 429
+          : true; // Network errors are retryable
+
+      if (isRetryableError && promptRetryCount < MAX_PROMPT_RETRIES) {
+        const nextRetry = promptRetryCount + 1;
+        setPromptRetryCount(nextRetry);
+        setLlmStatusText(`Переподключение... (попытка ${nextRetry + 1}/${MAX_PROMPT_RETRIES + 1})`);
+
+        // Retry after 2 seconds
+        setTimeout(() => {
+          handlePromptSubmit();
+        }, 2000);
+      } else {
+        // All retries exhausted or non-retryable error
+        setLlmError(GENERIC_LLM_ERROR);
+        setIsSendingPrompt(false);
+        setLlmStatusText(null);
+        setPromptRetryCount(0);
+        jobStartTimeRef.current = 0;
+      }
+    }
+  }, [
+    activeLesson.id,
+    activeLesson,
+    activeLessonMode,
+    activeLessonContent,
+    activeLessonContentError,
+    applyProgressPatch,
+    cleanupStream,
+    course.id,
+    courseQuota?.limit,
+    courseQuota?.remaining,
+    courseQuotaError,
+    courseQuotaLoading,
+    isSendingPrompt,
+    promptInput,
+    activeJobPrompt,
+    promptRetryCount,
+    quotaRequired,
+    startHtmlStream,
+    syncProgress,
+    onProgressChange,
+  ]);
+
   // If SSE isn't available (often after refresh), keep UI alive by polling progress status
   // and fetch full progress once the job is complete.
   useEffect(() => {
@@ -2560,173 +2727,6 @@ export const CourseViewer: React.FC<CourseViewerProps> = ({
 
     return () => window.clearInterval(interval);
   }, [applyFinalPayload, cleanupStream, isSendingPrompt]);
-
-  const handlePromptSubmit = useCallback(async (options?: { prompt?: string; retryOfJobId?: string; allowWhileSending?: boolean; isAutoRetry?: boolean }) => {
-    const prompt = (options?.prompt ?? promptInput).trim();
-    const allowWhileSending = options?.allowWhileSending === true;
-    const isAutoRetry = options?.isAutoRetry === true;
-    if (!prompt || (isSendingPrompt && !allowWhileSending)) return;
-    if (!activeLessonContent) {
-      setLlmError(
-        activeLessonContentError
-        || 'Контент урока ещё загружается. Подождите пару секунд и попробуйте снова.',
-      );
-      return;
-    }
-    if (!isAutoRetry) {
-      if (quotaRequired && (courseQuotaLoading || !courseQuota)) {
-        setLlmError(courseQuotaError || GENERIC_RELOAD_ERROR);
-        return;
-      }
-      if (courseQuota?.limit != null && courseQuota.remaining === 0) {
-        setLlmError('Лимит запросов для этого курса исчерпан.');
-        return;
-      }
-    }
-
-    cleanupStream();
-    setIsSendingPrompt(true);
-    setLlmError(null);
-    setLlmStatusText(isAutoRetry ? 'Перезапускаем генерацию...' : null);
-    setLlmHtml(null);
-    setLlmText(null);
-    setTypedText('');
-    setLlmCss(null);
-    setLlmSections({});
-    setLlmSectionOrder([]);
-    llmOutlineRef.current = null;
-
-    // Only reset retry count if this is a fresh user-initiated submit (not a retry)
-    if (promptRetryCount === 0) {
-      // Fresh submit - counter already at 0
-    }
-
-    // Re-fetch lesson content without ETag before starting, to avoid stale cached settings (mode).
-    let requestedMode = activeLessonMode;
-    try {
-      const fresh = await fetchLessonContent(activeLesson.id, { bypassCache: true });
-      setActiveLessonContent(fresh);
-      requestedMode = getLessonMode({ ...activeLesson, ...(fresh ?? {}) });
-    } catch (error) {
-      console.warn('Failed to refresh lesson content before start', error);
-    }
-
-    if (requestedMode === 'create') {
-      setUiActiveFile('index.html');
-    }
-
-    try {
-      await applyProgressPatch({
-        op: 'lesson_prompt',
-        lessonId: activeLesson.id,
-        prompt,
-      });
-
-      const response = await apiFetch<{ jobId?: string; outline?: unknown; quota?: CourseQuota }>(
-        '/api/v1/html/start',
-        {
-          method: 'POST',
-          body: JSON.stringify({
-            prompt,
-            lessonId: activeLesson.id,
-            mode: requestedMode,
-            courseId: course.id,
-            retryOfJobId: options?.retryOfJobId,
-          }),
-        },
-      );
-
-      if (response && typeof response === 'object' && typeof (response as any).error === 'string') {
-        throw new Error((response as any).error);
-      }
-
-      if (!response?.jobId) {
-        throw new Error('Сервер не вернул идентификатор задачи генерации.');
-      }
-
-      // Optimistic: mark the job as queued immediately so the loader stays visible
-      // even if the SSE connection can't be established (common after refresh).
-      {
-        const now = new Date().toISOString();
-        jobStartTimeRef.current = Date.now(); // Track start time for progress display
-        const next: CourseProgress = {
-          ...(courseProgressRef.current ?? {}),
-          active_job: {
-            jobId: response.jobId,
-            status: 'queued',
-            lessonId: activeLesson.id,
-            courseId: course.id,
-            prompt,
-            mode: requestedMode,
-            startedAt: now,
-            updatedAt: now,
-          } as any,
-        };
-        courseProgressRef.current = next;
-        setCourseProgress(next);
-        onProgressChange?.(course.id, next);
-      }
-
-      setLlmOutline(response.outline ?? null);
-      if (response.quota && typeof response.quota === 'object') {
-        setCourseQuota(response.quota);
-      }
-      // Removed redundant fetchCourseProgress(course.id) here to prevent "running" -> "queued" flicker
-      // which was causing the streaming effect to abort and restart unnecessarily.
-      startHtmlStream(response.jobId);
-      setPromptRetryCount(0); // Reset retry counter on success
-    } catch (error) {
-      const apiDetails = error instanceof ApiError
-        ? { status: error.status, body: error.body }
-        : null;
-      console.error('Failed to send prompt to LLM', { error, apiDetails });
-
-      // Auto-retry on temporary errors (network, timeout, 5xx)
-      const isRetryableError =
-        error instanceof ApiError
-          ? error.status >= 500 || error.status === 408 || error.status === 429
-          : true; // Network errors are retryable
-
-      if (isRetryableError && promptRetryCount < MAX_PROMPT_RETRIES) {
-        const nextRetry = promptRetryCount + 1;
-        setPromptRetryCount(nextRetry);
-        setLlmStatusText(`Переподключение... (попытка ${nextRetry + 1}/${MAX_PROMPT_RETRIES + 1})`);
-
-        // Retry after 2 seconds
-        setTimeout(() => {
-          handlePromptSubmit();
-        }, 2000);
-      } else {
-        // All retries exhausted or non-retryable error
-        setLlmError(GENERIC_LLM_ERROR);
-        setIsSendingPrompt(false);
-        setLlmStatusText(null);
-        setPromptRetryCount(0);
-        jobStartTimeRef.current = 0;
-      }
-    }
-  }, [
-    activeLesson.id,
-    activeLesson,
-    activeLessonMode,
-    activeLessonContent,
-    activeLessonContentError,
-    applyProgressPatch,
-    cleanupStream,
-    course.id,
-    courseQuota?.limit,
-    courseQuota?.remaining,
-    courseQuotaError,
-    courseQuotaLoading,
-    isSendingPrompt,
-    promptInput,
-    activeJobPrompt,
-    promptRetryCount,
-    quotaRequired,
-    startHtmlStream,
-    syncProgress,
-    onProgressChange,
-  ]);
 
   // On mount, if we have an active job, initialize the heartbeat ref 
   // to prevent the stall detector from firing before the stream starts.
