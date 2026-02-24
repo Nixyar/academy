@@ -1,3846 +1,536 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Course, CourseProgress, LessonType } from '../types';
-import { ImageAnalyzer } from './ImageAnalyzer';
-import { ImageEditor } from './ImageEditor';
-import { FileText, Menu, X, ChevronLeft, ChevronRight, ChevronDown, Send, Info, Lightbulb, Star, Sparkles, Maximize, Minimize } from 'lucide-react';
-import { fetchCourseProgress, fetchCourseProgressStatus, fetchCourseResume, patchCourseProgress } from '../services/progressApi';
-import { ApiError, apiFetch } from '../services/apiClient';
-import { fetchCourseQuota, type CourseQuota } from '../services/courseQuotaApi';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import type { Course, CourseProgress, CourseModule, Lesson, LessonBlock, User } from '../types';
+import {
+  Divider,
+  List,
+  Tip,
+  Comparison,
+  PracticeStep,
+  ReflectionTask,
+  InteractiveTable,
+  Feedback,
+} from './BlockComponents';
+import AiHelper from './AiHelper';
+import { ChevronLeft, CheckCircle2, Circle, Zap, ArrowRight, Menu, Sparkles, Loader2, FolderOpen } from 'lucide-react';
 import { fetchLessonContent, getCachedLessonContent } from '../services/lessonsApi';
-import { getCourseFeedback, submitCourseFeedback } from '../services/feedbackApi';
+import { patchCourseProgress } from '../services/progressApi';
+import { fetchCourseQuota } from '../services/courseQuotaApi';
+import { submitCourseFeedback } from '../services/feedbackApi';
 
-const IFRAME_BASE_STYLES = `
-  :root { color-scheme: dark; }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0;
-    padding: 0;
-    background: #050914;
-    color: #e5e7eb;
-    font-family: 'Inter', 'SF Pro Text', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    line-height: 1.6;
-  }
-  a { color: #7dd3fc; }
-  img { max-width: 100%; display: block; }
-`;
+/* ─── Copy-protection for lesson content ─── */
+const COPYABLE_SELECTOR = [
+  'pre', 'code', 'textarea', 'input',
+  '[data-copyable]', '.copyable',
+  '[contenteditable="true"]',
+].join(',');
 
-type Workspace = {
-  files: Record<string, string>;
-  activeFile: string;
-  source: 'files' | 'html' | 'empty';
-};
+function useContentProtection(ref: React.RefObject<HTMLElement | null>) {
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
 
-// A) Normalize workspace coming from backend (or legacy html-only progress).
-function getWorkspace(progress: any): Workspace {
-  const result = progress?.result;
-
-  if (result?.files && typeof result.files === 'object' && !Array.isArray(result.files)) {
-    const files: Record<string, string> = {};
-    Object.entries(result.files as Record<string, unknown>).forEach(([key, value]) => {
-      if (typeof value === 'string') files[key] = value;
-    });
-
-    const desiredActive = typeof result.active_file === 'string' ? (result.active_file as string) : 'index.html';
-    const hasIndex = Object.prototype.hasOwnProperty.call(files, 'index.html');
-    const fallbackActive = hasIndex ? 'index.html' : Object.keys(files)[0] ?? 'index.html';
-    const hasDesired = Object.prototype.hasOwnProperty.call(files, desiredActive);
-    const activeFile = hasDesired ? desiredActive : fallbackActive;
-
-    return {
-      files: Object.keys(files).length > 0 ? files : { 'index.html': '' },
-      activeFile,
-      source: 'files',
+    const isInsideCopyable = (target: EventTarget | null): boolean => {
+      if (!(target instanceof HTMLElement)) return false;
+      return !!target.closest(COPYABLE_SELECTOR);
     };
-  }
 
-  if (typeof result?.html === 'string') {
-    return { files: { 'index.html': result.html as string }, activeFile: 'index.html', source: 'html' };
-  }
+    const onCopy = (e: ClipboardEvent) => {
+      if (isInsideCopyable(e.target)) return;         // allow copy in code/inputs
+      e.preventDefault();
+    };
+    const onCut = (e: ClipboardEvent) => {
+      if (isInsideCopyable(e.target)) return;
+      e.preventDefault();
+    };
+    const onContextMenu = (e: MouseEvent) => {
+      if (isInsideCopyable(e.target)) return;
+      e.preventDefault();
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (isInsideCopyable(e.target)) return;
+      const mod = e.ctrlKey || e.metaKey;
+      // Block Ctrl+C, Ctrl+A, Ctrl+S, Ctrl+U, Ctrl+P
+      if (mod && ['c','a','s','u','p'].includes(e.key.toLowerCase())) {
+        e.preventDefault();
+      }
+      // Block F12 / Ctrl+Shift+I (DevTools)
+      if (e.key === 'F12' || (mod && e.shiftKey && e.key.toLowerCase() === 'i')) {
+        e.preventDefault();
+      }
+    };
+    const onDragStart = (e: DragEvent) => {
+      if (isInsideCopyable(e.target)) return;
+      e.preventDefault();
+    };
 
-  if (typeof progress?.result_html === 'string') {
-    return { files: { 'index.html': progress.result_html as string }, activeFile: 'index.html', source: 'html' };
-  }
+    el.addEventListener('copy', onCopy);
+    el.addEventListener('cut', onCut);
+    el.addEventListener('contextmenu', onContextMenu);
+    el.addEventListener('keydown', onKeyDown);
+    el.addEventListener('dragstart', onDragStart);
 
-  return { files: { 'index.html': '' }, activeFile: 'index.html', source: 'empty' };
-}
-
-function decorateHtmlForPreview(rawHtml: string, extraCss: string | null): string {
-  const raw = String(rawHtml ?? '').trim();
-  const stylePieces = [IFRAME_BASE_STYLES];
-  if (extraCss && extraCss.trim() && !raw.includes(extraCss)) stylePieces.push(extraCss);
-  const styleTag = `<style>${stylePieces.join('\n')}</style>`;
-  const tailwindScriptTag = `<script src="https://cdn.tailwindcss.com"></script>`;
-  const headInjection = `${tailwindScriptTag}${styleTag}`;
-
-  const ensureHead = (html: string) => {
-    if (/<head[^>]*>/i.test(html)) {
-      return html.replace(/<head[^>]*>/i, (match) => `${match}${headInjection}`);
-    }
-    if (/<html[^>]*>/i.test(html)) {
-      return html.replace(/<html[^>]*>/i, (match) => `${match}<head>${headInjection}</head>`);
-    }
-    return `${headInjection}\n${html}`;
-  };
-
-  if (!raw) {
-    return `<!doctype html>
-<html>
-<head>${styleTag}</head>
-<body></body>
-</html>`;
-  }
-
-  const withHead = ensureHead(raw);
-  const hasBodyTag = /<body[^>]*>/i.test(withHead);
-  if (hasBodyTag) return `<!doctype html>\n${withHead}`;
-
-  return `<!doctype html>
-<html>
-<head>${styleTag}</head>
-<body>
-${withHead}
-</body>
-</html>`;
-}
-
-function normalizeFileHref(href: string): string {
-  const trimmed = String(href ?? '').trim();
-  return trimmed.replace(/^\.?\//, '').split('?')[0].split('#')[0];
-}
-
-// E) Iframe navigation: intercept <a href="*.html"> and ask parent to switch active_file.
-function injectIframeRouter(html: string): string {
-  const script = `<script>
-(function () {
-  try {
-    if (window.__VIBE_IFRAME_ROUTER_INSTALLED) return;
-    window.__VIBE_IFRAME_ROUTER_INSTALLED = true;
-  } catch {}
-
-  document.addEventListener('click', function (event) {
-    var target = event && event.target;
-    if (!target || !target.closest) return;
-    var link = target.closest('a');
-    if (!link) return;
-    var href = (link.getAttribute('href') || '').trim();
-    if (!href) return;
-    if (href.charAt(0) === '#') return;
-    if (/^(mailto:|tel:)/i.test(href)) return;
-    if (/^javascript:/i.test(href)) { event.preventDefault(); return; }
-
-    var isHtml = /\\.html(\\?|#|$)/i.test(href);
-    if (isHtml) {
-      var file = href.replace(/^\\.\\//, '').split('?')[0].split('#')[0];
-      if (!file) return;
-      event.preventDefault();
-      try { window.parent.postMessage({ type: 'NAVIGATE_FILE', file: file }, '*'); } catch {}
-      return;
-    }
-
-    // Prevent the preview iframe from navigating away (e.g. to app routes like /courses/...).
-    event.preventDefault();
-    try { window.open(href, '_blank', 'noopener,noreferrer'); } catch {}
-  }, true);
-})();
-</script>`;
-
-  if (/<\/body\s*>/i.test(html)) {
-    return html.replace(/<\/body\s*>/i, `${script}</body>`);
-  }
-  return `${html}\n${script}`;
-}
-
-function extractCtaData(blocks: unknown[]): { buttonText: string | null; action: string | null } {
-  const extract = (block: unknown) => {
-    if (block && typeof block === 'object' && (block as any).type === 'cta') {
-      const buttonText = typeof (block as any).buttonText === 'string' ? ((block as any).buttonText as string) : null;
-      const action = typeof (block as any).action === 'string' ? ((block as any).action as string) : null;
-      if (buttonText || action) return { buttonText, action };
-    }
-    return null;
-  };
-
-  for (const block of blocks) {
-    const value = extract(block);
-    if (value) return value;
-  }
-
-  return { buttonText: null, action: null };
-}
-
-function describeApiError(error: unknown, fallback: string): string {
-  if (error instanceof ApiError) {
-    const body = error.body as any;
-    const fromBody = body?.message || body?.error;
-    return typeof fromBody === 'string' && fromBody.trim() ? fromBody : fallback;
-  }
-  if (error instanceof Error) return error.message || fallback;
-  return fallback;
-}
-
-const GENERIC_RELOAD_ERROR = 'Произошла ошибка. Попробуйте перезагрузить страницу';
-const GENERIC_LLM_ERROR = 'Ошибка генерации. Попробуйте ещё раз.';
-const MAX_PROMPT_RETRIES = 2;
-
-function getLessonMode(lesson: any): 'edit' | 'add_page' | 'create' | 'text' {
-  const rawSettings = lesson?.settings;
-  let settings: any = rawSettings;
-  if (typeof rawSettings === 'string') {
-    try {
-      settings = JSON.parse(rawSettings);
-    } catch {
-      settings = null;
-    }
-  }
-
-  const modeRaw =
-    (settings && typeof settings === 'object' && typeof settings.mode === 'string' ? settings.mode : null) ??
-    (typeof lesson?.mode === 'string' ? lesson.mode : null) ??
-    (typeof lesson?.settings_mode === 'string' ? lesson.settings_mode : null);
-
-  const normalized = typeof modeRaw === 'string' ? modeRaw.trim().toLowerCase() : '';
-  if (normalized === 'edit') return 'edit';
-  if (normalized === 'add_page' || normalized === 'add-page' || normalized === 'add page') return 'add_page';
-  if (normalized === 'text') return 'text';
-  return 'create';
+    return () => {
+      el.removeEventListener('copy', onCopy);
+      el.removeEventListener('cut', onCut);
+      el.removeEventListener('contextmenu', onContextMenu);
+      el.removeEventListener('keydown', onKeyDown);
+      el.removeEventListener('dragstart', onDragStart);
+    };
+  }, [ref]);
 }
 
 interface CourseViewerProps {
   course: Course;
+  user: User | null;
+  courseProgress: CourseProgress;
+  purchasedCourseIds: Set<string>;
   onBack: () => void;
-  isSubscribed: boolean;
-  initialProgress?: CourseProgress;
-  onProgressChange?: (courseId: string, progress: CourseProgress) => void;
+  onProgressChange: (courseId: string, progress: CourseProgress) => void;
+  onOpenAuth: () => void;
 }
 
-// BOLT ⚡: This function is pure and does not depend on component state.
-// By defining it outside the component, we prevent it from being re-created on every render,
-// which is a micro-optimization that reduces memory allocation and garbage collection pressure.
-const getValueByPath = (source: unknown, path: string): unknown => {
-  if (!path) return undefined;
-  return path.split('.').reduce((acc: any, key) => (acc && typeof acc === 'object' ? acc[key] : undefined), source);
-};
-
-const renderMarkdown = (text: string): React.ReactNode => {
-  const input = String(text ?? '');
-  if (!input.includes('**') && !input.includes('*') && !input.includes('`')) return input;
-
-  const parts: React.ReactNode[] = [];
-  // Updated regex to handle bold (**), italic (*), and code (`)
-  // We use a priority-based approach or a combined regex. 
-  // Combined regex approach:
-  const re = /(\*\*[\s\S]+?\*\*|\*[\s\S]+?\*|`[\s\S]+?`)/g;
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-  let key = 0;
-
-  while ((match = re.exec(input)) !== null) {
-    const start = match.index;
-    const end = start + match[0].length;
-    const before = input.slice(lastIndex, start);
-    if (before) parts.push(before);
-
-    const token = match[0];
-    if (token.startsWith('**') && token.endsWith('**')) {
-      const inner = token.slice(2, -2);
-      parts.push(<strong key={`b-${key}`} className="font-semibold">{renderMarkdown(inner)}</strong>);
-    } else if (token.startsWith('*') && token.endsWith('*')) {
-      const inner = token.slice(1, -1);
-      parts.push(<em key={`i-${key}`} className="italic">{renderMarkdown(inner)}</em>);
-    } else if (token.startsWith('`') && token.endsWith('`')) {
-      const inner = token.slice(1, -1);
-      parts.push(
-        <code key={`c-${key}`} className="px-1.5 py-0.5 rounded bg-white/10 font-mono text-[0.9em] border border-white/5 text-vibe-300">
-          {inner}
-        </code>
-      );
-    }
-
-    key += 1;
-    lastIndex = end;
-  }
-
-  const rest = input.slice(lastIndex);
-  if (rest) parts.push(rest);
-  return parts.length ? parts : input;
-};
-
-export const CourseViewer: React.FC<CourseViewerProps> = ({
+const CourseViewer: React.FC<CourseViewerProps> = ({
   course,
+  user,
+  courseProgress,
+  purchasedCourseIds,
   onBack,
-  isSubscribed,
-  initialProgress,
   onProgressChange,
+  onOpenAuth,
 }) => {
-  const apiBaseUrl =
-    (import.meta as any).env?.DEV === true ? '' : (import.meta as any).env?.VITE_API_BASE_URL ?? '';
-  const apiBaseUrlRef = useRef(apiBaseUrl);
-  useEffect(() => {
-    apiBaseUrlRef.current = apiBaseUrl;
-  }, [apiBaseUrl]);
-  const [activeLessonIndex, setActiveLessonIndex] = useState(() => {
-    const resumeId = initialProgress?.resume_lesson_id || initialProgress?.last_viewed_lesson_id;
-    if (resumeId) {
-      const idx = course.lessons.findIndex((l) => l.id === resumeId);
-      if (idx !== -1) return idx;
-    }
-    return 0;
-  });
-  const [isFullScreen, setIsFullScreen] = useState(false);
-  const activeLesson = course.lessons[activeLessonIndex];
-  const [activeLessonContent, setActiveLessonContent] = useState<{
-    blocks: unknown;
-    settings: unknown;
-    unlock_rule: unknown;
-  } | null>(null);
-  const [activeLessonContentLoading, setActiveLessonContentLoading] = useState(false);
-  const [activeLessonContentError, setActiveLessonContentError] = useState<string | null>(null);
+  const lessons = course.lessons ?? [];
+  const modules = course.modules ?? [];
+  const hasModules = modules.length > 0;
 
-  const activeLessonResolved = useMemo(
-    () => ({ ...activeLesson, ...(activeLessonContent ?? {}) }),
-    [activeLesson, activeLessonContent],
-  );
-  const activeLessonMode = useMemo(() => getLessonMode(activeLessonResolved), [activeLessonResolved]);
-  const isTextMode = activeLessonMode === 'text';
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [quizAnswer, setQuizAnswer] = useState<number | null>(null);
-  const [copiedExample, setCopiedExample] = useState<number | null>(null);
-  const [copiedPromptBlock, setCopiedPromptBlock] = useState<number | null>(null);
-  const [courseProgress, setCourseProgress] = useState<CourseProgress>(initialProgress ?? {});
-  const courseProgressRef = useRef<CourseProgress>(initialProgress ?? {});
-  useEffect(() => {
-    courseProgressRef.current = courseProgress;
-  }, [courseProgress]);
-  const [progressLoading, setProgressLoading] = useState(false);
-  const [promptInput, setPromptInput] = useState('');
-  const [isSendingPrompt, setIsSendingPrompt] = useState(false);
-  const [promptRetryCount, setPromptRetryCount] = useState(0);
-  const jobStartTimeRef = useRef<number>(0);
-  const [jobElapsedSeconds, setJobElapsedSeconds] = useState(0);
-  const [feedbackRating, setFeedbackRating] = useState(0);
-  const [feedbackComment, setFeedbackComment] = useState('');
-  const [feedbackSubmitted, setFeedbackSubmitted] = useState(false);
-  const [feedbackLoading, setFeedbackLoading] = useState(false);
-  const [feedbackError, setFeedbackError] = useState<string | null>(null);
-  const [feedbackSavedAt, setFeedbackSavedAt] = useState<string | null>(null);
-  const [courseQuota, setCourseQuota] = useState<CourseQuota | null>(null);
-  const [courseQuotaLoading, setCourseQuotaLoading] = useState(false);
-  const [courseQuotaError, setCourseQuotaError] = useState<string | null>(null);
-  const [llmHtml, setLlmHtml] = useState<string | null>(null);
-  const [llmText, setLlmText] = useState<string | null>(null);
-  const [typedText, setTypedText] = useState('');
-  const [llmError, setLlmError] = useState<string | null>(null);
-  const [llmOutline, setLlmOutline] = useState<unknown>(null);
-  const [llmCss, setLlmCss] = useState<string | null>(null);
-  const [llmSections, setLlmSections] = useState<Record<string, string>>({});
-  const [llmSectionOrder, setLlmSectionOrder] = useState<string[]>([]);
-  const [llmStatusText, setLlmStatusText] = useState<string | null>(null);
-  const llmCssRef = useRef<string | null>(null);
-  const llmSectionsRef = useRef<Record<string, string>>({});
-  const llmSectionOrderRef = useRef<string[]>([]);
-  const llmOutlineRef = useRef<unknown>(null);
-  const typingTimerRef = useRef<number | null>(null);
-  const streamControllerRef = useRef<AbortController | null>(null);
-  const streamingJobIdRef = useRef<string | null>(null);
-  const streamLastEventAtRef = useRef<number>(0);
-  const progressPollActiveRef = useRef(false);
-  const pollBackoffUntilRef = useRef(0);
-  const canPersistPromptRef = useRef(true);
-  const lessonContentRef = useRef<HTMLDivElement>(null);
+  const [currentLessonIndex, setCurrentLessonIndex] = useState(0);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
-  const extractFeedbackFromProgress = useCallback((progress: CourseProgress | null | undefined) => {
-    if (!progress || typeof progress !== 'object') return null;
-    const raw = (progress as any).feedback ?? (progress as any).course_feedback ?? null;
-    if (!raw || typeof raw !== 'object') return null;
-    const rating = typeof (raw as any).rating === 'number' ? (raw as any).rating : Number((raw as any).rating);
-    if (!Number.isFinite(rating) || rating <= 0) return null;
-    const comment =
-      typeof (raw as any).comment === 'string' ? (raw as any).comment : null;
-    const updatedAt =
-      typeof (raw as any).updated_at === 'string'
-        ? (raw as any).updated_at
-        : (typeof (raw as any).updatedAt === 'string' ? (raw as any).updatedAt : null);
-    return { rating, comment, updatedAt };
-  }, []);
+  // Copy-protection ref
+  const protectedRef = useRef<HTMLDivElement>(null);
+  useContentProtection(protectedRef);
 
-  const hasFeedbackBlock = useMemo(() => {
-    const blocksRaw = (activeLessonResolved as any)?.blocks;
-    const list = Array.isArray(blocksRaw) ? blocksRaw : (blocksRaw ? [blocksRaw] : []);
-    return list.some((block) => block && typeof block === 'object' && (block as any).type === 'feedback');
-  }, [activeLessonResolved]);
+  // Lesson content (blocks loaded from API)
+  const [lessonBlocks, setLessonBlocks] = useState<LessonBlock[]>([]);
+  const [blocksLoading, setBlocksLoading] = useState(false);
 
+  // AI Quota
+  const [quotaUsed, setQuotaUsed] = useState(0);
+  const [quotaLimit, setQuotaLimit] = useState<number | null>(course.llmLimit ?? null);
 
-  useEffect(() => {
-    let cancelled = false;
+  // AI Helper State
+  const [selection, setSelection] = useState('');
+  const [showAiHelper, setShowAiHelper] = useState(false);
+  const [showAiTrigger, setShowAiTrigger] = useState(false);
 
-    const cached = getCachedLessonContent(activeLesson.id);
-    setActiveLessonContent(cached);
-    setActiveLessonContentLoading(!cached);
-    setActiveLessonContentError(null);
+  const currentLesson = lessons[currentLessonIndex];
+  const isGuest = !user;
+  const isCompleted = courseProgress?.lessons?.[currentLesson?.id]?.status === 'completed';
 
-    fetchLessonContent(activeLesson.id)
-      .then((data) => {
-        if (cancelled) return;
-        setActiveLessonContent(data);
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        if (!cached) {
-          setActiveLessonContent(null);
-          setActiveLessonContentError(describeApiError(err, GENERIC_RELOAD_ERROR));
-        }
-      })
-      .finally(() => {
-        if (cancelled) return;
-        setActiveLessonContentLoading(false);
-      });
+  const requestsRemaining = quotaLimit !== null ? Math.max(0, quotaLimit - quotaUsed) : 999;
 
-    return () => {
-      cancelled = true;
-    };
-  }, [activeLesson.id]);
-
-  // Prefetch next lesson content for instant navigation
-  useEffect(() => {
-    const nextLessonIndex = activeLessonIndex + 1;
-    if (nextLessonIndex < course.lessons.length) {
-      const nextLesson = course.lessons[nextLessonIndex];
-      if (nextLesson?.id) {
-        // Prefetch in background - errors are silently ignored
-        fetchLessonContent(nextLesson.id).catch(() => {
-          // Prefetch failure is non-critical
-        });
-      }
-    }
-  }, [activeLessonIndex, course.lessons]);
-
-  // Reset retry counter when switching lessons
-  useEffect(() => {
-    setPromptRetryCount(0);
-  }, [activeLesson.id]);
-
-  // Track elapsed time during job execution for progress display
-  useEffect(() => {
-    if (!isSendingPrompt || jobStartTimeRef.current === 0) {
-      setJobElapsedSeconds(0);
+  // Load lesson content from API
+  const loadLessonContent = useCallback(async (lessonId: string) => {
+    // Check if blocks are already inline in the lesson object
+    const lesson = lessons.find(l => l.id === lessonId);
+    if (lesson?.blocks && Array.isArray(lesson.blocks) && lesson.blocks.length > 0) {
+      setLessonBlocks(lesson.blocks as LessonBlock[]);
       return;
     }
 
-    const interval = window.setInterval(() => {
-      const elapsed = Math.floor((Date.now() - jobStartTimeRef.current) / 1000);
-      setJobElapsedSeconds(elapsed);
-    }, 1000);
-
-    return () => window.clearInterval(interval);
-  }, [isSendingPrompt]);
-
-  const lastLessonIdRef = useRef<string>(course.lessons[activeLessonIndex]?.id ?? '');
-  const fetchedResultJobIdRef = useRef<string | null>(null);
-  const previewIframeRef = useRef<HTMLIFrameElement | null>(null);
-  const autoRetryJobIdsRef = useRef<Set<string>>(new Set());
-  const rawActiveJob = (courseProgress as any)?.active_job;
-  const rawActiveJobStatus =
-    (courseProgress as any)?.active_job_status ??
-    (rawActiveJob && typeof rawActiveJob === 'object' ? (rawActiveJob as any).status : null);
-  const activeJobStatus = rawActiveJobStatus ?? null;
-  const rawActiveJobId =
-    typeof (courseProgress as any)?.active_job_id === 'string'
-      ? (courseProgress as any).active_job_id
-      : rawActiveJob && typeof rawActiveJob === 'object'
-        ? (typeof (rawActiveJob as any).jobId === 'string'
-          ? (rawActiveJob as any).jobId
-          : typeof (rawActiveJob as any).job_id === 'string'
-            ? (rawActiveJob as any).job_id
-            : null)
-        : null;
-  const activeJobId = typeof rawActiveJobId === 'string' ? rawActiveJobId : null;
-  const rawActiveJobPrompt =
-    (courseProgress as any)?.active_job_prompt ??
-    (rawActiveJob && typeof rawActiveJob === 'object' ? (rawActiveJob as any).prompt : null);
-  const activeJobPrompt = typeof rawActiveJobPrompt === 'string' ? rawActiveJobPrompt : '';
-  const rawActiveJobError =
-    (rawActiveJob && typeof rawActiveJob === 'object' ? (rawActiveJob as any).error : null) ??
-    (rawActiveJob && typeof rawActiveJob === 'object' ? (rawActiveJob as any).code : null);
-  const activeJobError = typeof rawActiveJobError === 'string' ? rawActiveJobError : null;
-  const rawActiveJobErrorDetails =
-    (rawActiveJob && typeof rawActiveJob === 'object' ? (rawActiveJob as any).error_details : null) ??
-    (rawActiveJob && typeof rawActiveJob === 'object' ? (rawActiveJob as any).details : null);
-  const activeJobErrorDetails = typeof rawActiveJobErrorDetails === 'string' ? rawActiveJobErrorDetails : null;
-  const rawActiveJobStatusMessage =
-    (rawActiveJob && typeof rawActiveJob === 'object'
-      ? ((rawActiveJob as any).status_message ?? (rawActiveJob as any).statusMessage)
-      : null) ??
-    (courseProgress as any)?.active_job_status_message ??
-    null;
-  const activeJobStatusMessage = typeof rawActiveJobStatusMessage === 'string' ? rawActiveJobStatusMessage : null;
-  const rawActiveJobUpdatedAt =
-    rawActiveJob && typeof rawActiveJob === 'object'
-      ? (rawActiveJob as any).updatedAt ?? (rawActiveJob as any).updated_at
-      : null;
-  const activeJobUpdatedAt = typeof rawActiveJobUpdatedAt === 'string' ? rawActiveJobUpdatedAt : null;
-  const rawActiveJobLessonId =
-    typeof (courseProgress as any)?.active_job_lesson_id === 'string'
-      ? (courseProgress as any).active_job_lesson_id
-      : rawActiveJob && typeof rawActiveJob === 'object'
-        ? (typeof (rawActiveJob as any).lessonId === 'string'
-          ? (rawActiveJob as any).lessonId
-          : typeof (rawActiveJob as any).lesson_id === 'string'
-            ? (rawActiveJob as any).lesson_id
-            : null)
-        : null;
-  const activeJobLessonId = typeof rawActiveJobLessonId === 'string' ? rawActiveJobLessonId : null;
-  const isPromptLocked = activeJobStatus === 'running' || activeJobStatus === 'queued';
-  const isActiveJobForLesson = activeJobLessonId ? activeJobLessonId === activeLesson.id : false;
-  const isPromptLockedForLesson = isPromptLocked && isActiveJobForLesson;
-  const savedResultHtml =
-    typeof (courseProgress as any)?.result?.html === 'string'
-      ? ((courseProgress as any).result as any).html
-      : typeof (courseProgress as any)?.result_html === 'string'
-        ? ((courseProgress as any).result_html as any)
-        : typeof (courseProgress as any)?.lessons?.[activeLesson.id]?.result?.html === 'string'
-          ? ((courseProgress as any).lessons?.[activeLesson.id]?.result as any).html
-          : '';
-  const savedResultText =
-    typeof (courseProgress as any)?.result?.text === 'string'
-      ? ((courseProgress as any).result as any).text
-      : typeof (courseProgress as any)?.lessons?.[activeLesson.id]?.result?.text === 'string'
-        ? ((courseProgress as any).lessons?.[activeLesson.id]?.result as any).text
-        : '';
-  const hasStoredFilesResult = Boolean(
-    ((courseProgress as any)?.result?.files &&
-      typeof (courseProgress as any).result.files === 'object' &&
-      !Array.isArray((courseProgress as any).result.files)) ||
-    ((courseProgress as any)?.lessons?.[activeLesson.id]?.result?.files &&
-      typeof (courseProgress as any).lessons?.[activeLesson.id]?.result?.files === 'object' &&
-      !Array.isArray((courseProgress as any).lessons?.[activeLesson.id]?.result?.files)),
-  );
-  const hasCompletedJob = activeJobStatus === 'done';
-
-  const getActiveJobMeta = useCallback((progress: CourseProgress | null | undefined) => {
-    const active = progress && typeof progress === 'object' ? (progress as any).active_job : null;
-    const status =
-      (progress as any)?.active_job_status ??
-      (active && typeof active === 'object' ? (active as any).status : null);
-    const jobId =
-      (progress as any)?.active_job_id ??
-      (active && typeof active === 'object'
-        ? (active as any).jobId ?? (active as any).job_id ?? null
-        : null);
-    const error =
-      (progress as any)?.active_job_error ??
-      (active && typeof active === 'object' ? (active as any).error ?? null : null);
-    const details =
-      (progress as any)?.active_job_error_details ??
-      (active && typeof active === 'object' ? (active as any).error_details ?? null : null);
-
-    return { active, status, jobId, error, details };
-  }, []);
-
-  const mergeProgressPreservingFailedJob = useCallback((next: CourseProgress) => {
-    const prev = courseProgressRef.current ?? {};
-    const prevMeta = getActiveJobMeta(prev);
-    const nextMeta = getActiveJobMeta(next);
-
-    const nextStatus = nextMeta.status;
-    const prevFailed =
-      prevMeta.status === 'failed' &&
-      prevMeta.jobId &&
-      prevMeta.jobId === nextMeta.jobId &&
-      (nextStatus === 'running' || nextStatus === 'queued');
-
-    if (!prevFailed) return next;
-
-    const mergedActive = {
-      ...(nextMeta.active && typeof nextMeta.active === 'object' ? nextMeta.active : {}),
-      ...(prevMeta.active && typeof prevMeta.active === 'object' ? prevMeta.active : {}),
-      jobId: prevMeta.jobId,
-      status: 'failed',
-      error: prevMeta.error ?? (nextMeta.active as any)?.error ?? 'FAILED',
-      ...(prevMeta.details ? { error_details: prevMeta.details } : null),
-    };
-
-    return {
-      ...(next as any),
-      active_job: mergedActive,
-      active_job_status: 'failed',
-      active_job_error: prevMeta.error ?? (mergedActive as any).error ?? 'FAILED',
-      ...(prevMeta.details ? { active_job_error_details: prevMeta.details } : null),
-    };
-  }, [getActiveJobMeta]);
-
-  const syncProgress = useCallback(
-    (next: CourseProgress) => {
-      const prev = courseProgressRef.current ?? {};
-      const merged = mergeProgressPreservingFailedJob(next);
-
-      // Сохраняем result.html из prev если он есть, но нет в merged
-      const prevResultHtml = (prev as any)?.result?.html;
-      const mergedResultHtml = (merged as any)?.result?.html;
-      if (prevResultHtml && !mergedResultHtml) {
-        const preservedResult = {
-          ...merged,
-          result: {
-            ...((merged as any).result || {}),
-            html: prevResultHtml,
-          },
-        };
-        courseProgressRef.current = preservedResult;
-        setCourseProgress(preservedResult);
-        onProgressChange?.(course.id, preservedResult);
-      } else {
-        courseProgressRef.current = merged;
-        setCourseProgress(merged);
-        onProgressChange?.(course.id, merged);
-      }
-    },
-    [course.id, mergeProgressPreservingFailedJob, onProgressChange],
-  );
-
-
-
-  useEffect(() => {
-    if (lessonContentRef.current) {
-      lessonContentRef.current.scrollTo(0, 0);
-    }
-  }, [activeLesson.id]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    setFeedbackError(null);
-    setFeedbackLoading(false);
-    setFeedbackRating(0);
-    setFeedbackComment('');
-    setFeedbackSubmitted(false);
-    setFeedbackSavedAt(null);
-
-    async function loadExistingFeedback() {
-      if (!hasFeedbackBlock) return;
-      setFeedbackLoading(true);
-
-      try {
-        const cached = extractFeedbackFromProgress(courseProgressRef.current);
-        if (cached) {
-          setFeedbackRating(cached.rating);
-          setFeedbackComment(cached.comment || '');
-          setFeedbackSubmitted(true);
-          setFeedbackSavedAt(cached.updatedAt || null);
-          return;
-        }
-
-        const data = await getCourseFeedback(course.id);
-        if (cancelled) return;
-
-        if (data && typeof data.rating === 'number') {
-          setFeedbackRating(data.rating);
-          setFeedbackComment(data.comment || '');
-          setFeedbackSubmitted(true);
-          setFeedbackSavedAt(data.updated_at || null);
-        }
-      } catch (err) {
-        if (cancelled) return;
-        console.warn('Failed to load course feedback', err);
-        // Не показываем ошибку если просто нет отзыва
-        if (err instanceof ApiError && err.status !== 401) {
-          setFeedbackError('Не удалось загрузить ваш отзыв. Попробуйте позже.');
-        }
-      } finally {
-        if (cancelled) return;
-        setFeedbackLoading(false);
-      }
+    // Check local cache first
+    const cached = getCachedLessonContent(lessonId);
+    if (cached?.blocks && Array.isArray(cached.blocks)) {
+      setLessonBlocks(cached.blocks as LessonBlock[]);
+      return;
     }
 
-    void loadExistingFeedback();
-    return () => {
-      cancelled = true;
-    };
-  }, [course.id, extractFeedbackFromProgress, hasFeedbackBlock]);
-
-  const handleSubmitFeedback = useCallback(async () => {
-    if (feedbackRating <= 0) return;
-    setFeedbackError(null);
-    setFeedbackLoading(true);
-
+    // Fetch from API
+    setBlocksLoading(true);
     try {
-      const result = await submitCourseFeedback(course.id, feedbackRating, feedbackComment.trim());
-
-      setFeedbackSubmitted(true);
-      const savedAt = result.updated_at || new Date().toISOString();
-      setFeedbackSavedAt(savedAt);
-      try {
-        const updated = await patchCourseProgress(course.id, {
-          op: 'course_feedback',
-          rating: feedbackRating,
-          comment: feedbackComment.trim(),
-          updatedAt: savedAt,
-        });
-        if (updated) syncProgress(updated);
-      } catch (progressError) {
-        console.warn('Failed to persist feedback in progress', progressError);
-      }
-    } catch (err: unknown) {
-      console.error('Failed to submit course feedback', err);
-
-      let message = 'Не удалось отправить отзыв.';
-      if (err instanceof ApiError) {
-        if (err.status === 401) {
-          message = 'Необходимо войти в аккаунт, чтобы оставить отзыв.';
-        } else if (err.body && typeof err.body === 'object' && 'message' in err.body && typeof err.body.message === 'string') {
-          message = err.body.message;
-        }
-      } else if (err && typeof err === 'object' && 'message' in err && typeof err.message === 'string') {
-        message = err.message;
-      }
-
-      setFeedbackError(message);
-    } finally {
-      setFeedbackLoading(false);
-    }
-  }, [course.id, feedbackComment, feedbackRating, syncProgress]);
-
-  const setLocalActiveJobStatus = useCallback(
-    (
-      jobId: string | null,
-      status: 'queued' | 'running' | 'done' | 'failed',
-      opts?: { code?: string | null; details?: string | null },
-    ) => {
-      const resolvedJobId = typeof jobId === 'string' ? jobId : null;
-      if (!resolvedJobId) return;
-
-      const prev = courseProgressRef.current ?? {};
-      const currentActive = (prev as any)?.active_job;
-      const currentJobId =
-        currentActive && typeof currentActive === 'object'
-          ? (currentActive.jobId ?? currentActive.job_id ?? null)
-          : null;
-      if (currentJobId && currentJobId !== resolvedJobId) return;
-
-      const now = new Date().toISOString();
-      const code = typeof opts?.code === 'string' && opts.code.trim() ? opts.code.trim() : null;
-      const details = typeof opts?.details === 'string' && opts.details.trim() ? opts.details.trim() : null;
-
-      const nextActiveJob: any = {
-        ...(currentActive && typeof currentActive === 'object' ? currentActive : {}),
-        jobId: resolvedJobId,
-        status,
-        updatedAt: now,
-      };
-
-      if (status === 'failed') {
-        nextActiveJob.error = code || nextActiveJob.error || 'FAILED';
-        if (details) nextActiveJob.error_details = details;
+      const content = await fetchLessonContent(lessonId);
+      if (content?.blocks && Array.isArray(content.blocks)) {
+        setLessonBlocks(content.blocks as LessonBlock[]);
       } else {
-        // Clear stale error fields on success/transition
-        if ('error' in nextActiveJob) delete nextActiveJob.error;
-        if ('error_details' in nextActiveJob) delete nextActiveJob.error_details;
+        setLessonBlocks([]);
       }
+    } catch (e) {
+      console.error('Failed to load lesson content', e);
+      setLessonBlocks([]);
+    } finally {
+      setBlocksLoading(false);
+    }
+  }, [lessons]);
 
-      const next: CourseProgress = {
-        ...(prev as any),
-        active_job: nextActiveJob,
-        active_job_status: status,
-        ...(status === 'failed'
-          ? {
-            active_job_error: nextActiveJob.error,
-            ...(nextActiveJob.error_details ? { active_job_error_details: nextActiveJob.error_details } : null),
-          }
-          : null),
-      };
-
-      courseProgressRef.current = next;
-      setCourseProgress(next);
-      onProgressChange?.(course.id, next);
-    },
-    [course.id, onProgressChange],
-  );
-
-  const markLocalActiveJobFailed = useCallback(
-    (jobId: string | null, opts?: { code?: string | null; details?: string | null; message?: string | null }) => {
-      const resolvedJobId = typeof jobId === 'string' ? jobId : null;
-      if (!resolvedJobId) return;
-
-      const prev = courseProgressRef.current ?? {};
-      const currentActive = (prev as any)?.active_job;
-      const currentJobId =
-        currentActive && typeof currentActive === 'object'
-          ? (currentActive.jobId ?? currentActive.job_id ?? null)
-          : null;
-      if (currentJobId && currentJobId !== resolvedJobId) return;
-
-      const now = new Date().toISOString();
-      const code = typeof opts?.code === 'string' && opts.code.trim() ? opts.code.trim() : 'FAILED';
-      const details = typeof opts?.details === 'string' && opts.details.trim() ? opts.details.trim() : null;
-
-      const nextActiveJob = {
-        ...(currentActive && typeof currentActive === 'object' ? currentActive : {}),
-        jobId: resolvedJobId,
-        status: 'failed',
-        updatedAt: now,
-        error: code,
-        ...(details ? { error_details: details } : null),
-      };
-
-      const next: CourseProgress = {
-        ...(prev as any),
-        active_job: nextActiveJob,
-        active_job_status: 'failed',
-        active_job_error: code,
-        ...(details ? { active_job_error_details: details } : null),
-      };
-
-      courseProgressRef.current = next;
-      setCourseProgress(next);
-      onProgressChange?.(course.id, next);
-    },
-    [course.id, onProgressChange],
-  );
-
+  // Load quota
   useEffect(() => {
-    courseProgressRef.current = initialProgress ?? {};
-    setCourseProgress(initialProgress ?? {});
-  }, [initialProgress, course.id]);
+    if (!user || !course.id) return;
+    fetchCourseQuota(course.id)
+      .then(q => {
+        setQuotaUsed(q.used);
+        setQuotaLimit(q.limit);
+      })
+      .catch(() => {});
+  }, [user, course.id]);
 
-  const applyProgressPatch = useCallback(
-    async (patch: Parameters<typeof patchCourseProgress>[1]): Promise<CourseProgress | undefined> => {
-      if ((patch as any)?.op === 'lesson_prompt' && !canPersistPromptRef.current) {
-        return undefined;
-      }
-      try {
-        const updated = await patchCourseProgress(course.id, patch);
-        syncProgress(updated ?? {});
-        return updated ?? {};
-      } catch (error) {
-        console.error('Failed to update progress', error);
-        if ((patch as any)?.op === 'lesson_prompt' && error instanceof ApiError) {
-          const code = (error.body as any)?.error;
-          if (code === 'FAILED_TO_SAVE_LESSON_PROMPT') {
-            canPersistPromptRef.current = false;
+  // Load content when lesson changes
+  useEffect(() => {
+    if (!currentLesson) return;
+    window.scrollTo(0, 0);
+    setIsSidebarOpen(false);
+    setShowAiHelper(false);
+    setShowAiTrigger(false);
+    setSelection('');
+    loadLessonContent(currentLesson.id);
+
+    // Track lesson view on server (touch)
+    if (user) {
+      patchCourseProgress(course.id, { op: 'touch_lesson', lessonId: currentLesson.id })
+        .then(updated => onProgressChange(course.id, updated))
+        .catch(() => {});
+    }
+  }, [currentLesson?.id]);
+
+  // Handle Text Selection
+  useEffect(() => {
+    const handleSelection = () => {
+      const text = window.getSelection()?.toString().trim();
+      if (text && text.length > 0) {
+        setSelection(text);
+        setShowAiTrigger(true);
+      } else {
+        setTimeout(() => {
+          if (!showAiHelper) {
+            setShowAiTrigger(false);
           }
-        }
-        return undefined;
+        }, 200);
       }
-    },
-    [course.id, syncProgress],
-  );
+    };
+    document.addEventListener('selectionchange', handleSelection);
+    return () => document.removeEventListener('selectionchange', handleSelection);
+  }, [showAiHelper]);
 
-  const isNonEmpty = (value: unknown) => {
-    if (value === null || value === undefined) return false;
-    if (typeof value === 'string') return value.trim().length > 0;
-    if (Array.isArray(value)) return value.length > 0;
-    if (typeof value === 'object') return Object.keys(value as object).length > 0;
-    return true;
+  const handleContextMenu = (e: React.MouseEvent) => {
+    const text = window.getSelection()?.toString().trim();
+    if (text && text.length > 0) {
+      e.preventDefault();
+      setSelection(text);
+      setShowAiHelper(true);
+    }
   };
 
-  const evaluateUnlockRule = useCallback(
-    (rule: any, data: unknown): boolean => {
-      if (typeof rule === 'string') {
-        try {
-          const parsed = JSON.parse(rule);
-          return evaluateUnlockRule(parsed, data);
-        } catch {
-          return true;
-        }
+  const handleNextAndComplete = async () => {
+    // Mark current as complete
+    if (!isCompleted && !isGuest && currentLesson) {
+      try {
+        const updated = await patchCourseProgress(course.id, {
+          op: 'lesson_status',
+          lessonId: currentLesson.id,
+          status: 'completed',
+          completedAt: new Date().toISOString(),
+        });
+        onProgressChange(course.id, updated);
+      } catch (e) {
+        console.error('Failed to save progress', e);
       }
+    }
 
-      if (!rule) return true;
-      if (rule && typeof rule === 'object' && Object.keys(rule).length === 0) return true;
+    // Move to next
+    if (currentLessonIndex < lessons.length - 1) {
+      setCurrentLessonIndex(prev => prev + 1);
+    } else {
+      onBack();
+    }
+  };
 
-      if (Array.isArray(rule.allOf)) {
-        return rule.allOf.every((child) => evaluateUnlockRule(child, data));
-      }
+  const handleRateLesson = async (rating: number) => {
+    if (isGuest) return;
+    try {
+      await submitCourseFeedback(course.id, rating);
+    } catch {
+      // Fallback: save via progress patch
+      try {
+        await patchCourseProgress(course.id, {
+          op: 'course_feedback',
+          rating,
+        });
+      } catch {}
+    }
+  };
 
-      if (Array.isArray(rule.anyOf)) {
-        return rule.anyOf.some((child) => evaluateUnlockRule(child, data));
-      }
+  const handleUseRequest = () => {
+    setQuotaUsed(prev => prev + 1);
+  };
 
-      const op = rule.op;
-      const path = typeof rule.path === 'string' ? rule.path : '';
-      const value = getValueByPath(data, path);
+  const renderBlock = (block: LessonBlock, index: number) => {
+    switch (block.type) {
+      case 'divider': return <Divider key={index} block={block} />;
+      case 'list': return <List key={index} block={block} />;
+      case 'tip': return <Tip key={index} block={block} />;
+      case 'comparison': return <Comparison key={index} block={block} />;
+      case 'practice_step':
+        return (
+          <PracticeStep
+            key={index}
+            block={block}
+            isGuest={isGuest}
+            onOpenAuth={onOpenAuth}
+            onRequest={() => {
+              if (!isGuest && requestsRemaining > 0) {
+                handleUseRequest();
+              }
+            }}
+            requestsRemaining={requestsRemaining}
+          />
+        );
+      case 'reflection_task': return <ReflectionTask key={index} block={block} />;
+      case 'interactive_table': return <InteractiveTable key={index} block={block} />;
+      case 'feedback': return <Feedback key={index} block={block} onRate={handleRateLesson} />;
+      default: return null;
+    }
+  };
 
-      switch (op) {
-        case 'exists':
-          return path ? value !== undefined : false;
-        case 'notEmpty':
-          return path ? isNonEmpty(value) : false;
-        case 'equals':
-          return path ? value === rule.value : false;
-        default:
-          return true;
-      }
-    },
-    [],
-  );
+  // Group lessons by module
+  const renderSidebarLessons = () => {
+    if (hasModules) {
+      // Lessons with modules
+      const moduleLessons = modules
+        .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
+        .map(mod => ({
+          module: mod,
+          lessons: lessons.filter(l => l.moduleId === mod.id),
+        }));
 
-  const resolveUnlockPlaceholders = useCallback(
-    (rule: any): any => {
-      const substituteValue = (value: unknown) => {
-        if (typeof value !== 'string') return value;
-        const normalized = value.trim();
-        const stripSigils = normalized
-          .replace(/^\$\{?/, '')
-          .replace(/\}?$/, '');
-        const map: Record<string, string> = {
-          lessonId: activeLesson.id,
-          'lesson.id': activeLesson.id,
-          currentLessonId: activeLesson.id,
-          lesson_id: activeLesson.id,
-        };
-        return map[normalized] ?? map[stripSigils] ?? normalized;
-      };
+      // Lessons without a module
+      const orphanLessons = lessons.filter(l => !l.moduleId);
 
-      if (Array.isArray(rule)) {
-        return rule.map((item) => resolveUnlockPlaceholders(item));
-      }
+      return (
+        <>
+          {orphanLessons.length > 0 && orphanLessons.map((lesson, idx) => renderLessonItem(lesson, lessons.indexOf(lesson)))}
+          {moduleLessons.map(({ module: mod, lessons: modLessons }) => (
+            <div key={mod.id} className="mt-4">
+              <div className="flex items-center gap-2 px-2 py-1.5 text-xs font-bold text-gray-500 uppercase tracking-wider">
+                <FolderOpen size={12} />
+                {mod.title}
+              </div>
+              {modLessons
+                .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
+                .map(lesson => renderLessonItem(lesson, lessons.indexOf(lesson)))}
+            </div>
+          ))}
+        </>
+      );
+    }
 
-      if (rule && typeof rule === 'object') {
-        const next: any = { ...rule };
-        if (next.allOf) next.allOf = resolveUnlockPlaceholders(next.allOf);
-        if (next.anyOf) next.anyOf = resolveUnlockPlaceholders(next.anyOf);
-        if ('value' in next) next.value = substituteValue(next.value);
-        return next;
-      }
+    // Flat list (no modules)
+    return lessons.map((lesson, idx) => renderLessonItem(lesson, idx));
+  };
 
-      return rule;
-    },
-    [activeLesson.id],
-  );
-
-  const unlockedLessonIds = useMemo(() => {
-    const unlocked = new Set<string>();
-    unlocked.add(activeLesson.id);
-
-    const lessonProgressMap = courseProgress?.lessons ?? {};
-    Object.entries(lessonProgressMap).forEach(([lessonId, progress]) => {
-      if (progress?.status === 'completed' || progress?.status === 'in_progress') {
-        unlocked.add(lessonId);
-      }
-    });
-
-    const resumeId = courseProgress?.resume_lesson_id;
-    const lastViewedId = courseProgress?.last_viewed_lesson_id;
-    if (typeof resumeId === 'string') unlocked.add(resumeId);
-    if (typeof lastViewedId === 'string') unlocked.add(lastViewedId);
-
-    return unlocked;
-  }, [activeLesson.id, courseProgress]);
-
-  const lessonIdsKey = useMemo(() => course.lessons.map((lesson) => lesson.id).join('|'), [course.lessons]);
-
-  const sortedCourseModules = useMemo(() => {
-    const modules = Array.isArray(course.modules) ? course.modules : [];
-    const copy = [...modules];
-    copy.sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
-    return copy;
-  }, [course.modules]);
-
-  const moduleById = useMemo(() => {
-    const map = new Map<string, (typeof sortedCourseModules)[number]>();
-    sortedCourseModules.forEach((module) => map.set(module.id, module));
-    return map;
-  }, [sortedCourseModules]);
-
-  const sidebarLessonGroups = useMemo(() => {
-    if (sortedCourseModules.length === 0) return null;
-
-    const grouped = new Map<string, Array<{ lesson: Course['lessons'][number]; idx: number }>>();
-    sortedCourseModules.forEach((module) => grouped.set(module.id, []));
-
-    const ungrouped: Array<{ lesson: Course['lessons'][number]; idx: number }> = [];
-
-    course.lessons.forEach((lesson, idx) => {
-      const moduleId = typeof (lesson as any)?.moduleId === 'string' ? ((lesson as any).moduleId as string) : null;
-      if (moduleId && grouped.has(moduleId)) {
-        grouped.get(moduleId)!.push({ lesson, idx });
-      } else {
-        ungrouped.push({ lesson, idx });
-      }
-    });
-
-    return { grouped, ungrouped };
-  }, [course.lessons, sortedCourseModules]);
-
-  const [collapsedSidebarGroups, setCollapsedSidebarGroups] = useState<Set<string>>(() => new Set());
-
-  const toggleSidebarGroup = useCallback((groupId: string) => {
-    setCollapsedSidebarGroups((prev) => {
-      const next = new Set(prev);
-      if (next.has(groupId)) next.delete(groupId);
-      else next.add(groupId);
-      return next;
-    });
-  }, []);
-
-  useEffect(() => {
-    const moduleId = typeof (activeLesson as any)?.moduleId === 'string' ? ((activeLesson as any).moduleId as string) : null;
-    const groupId = moduleId ? `module:${moduleId}` : 'ungrouped';
-    setCollapsedSidebarGroups((prev) => {
-      if (!prev.has(groupId)) return prev;
-      const next = new Set(prev);
-      next.delete(groupId);
-      return next;
-    });
-  }, [activeLesson]);
-
-  const activeModuleTitle = useMemo(() => {
-    const moduleId = typeof (activeLesson as any)?.moduleId === 'string' ? ((activeLesson as any).moduleId as string) : null;
-    if (!moduleId) return null;
-    return moduleById.get(moduleId)?.title ?? null;
-  }, [activeLesson, moduleById]);
-
-  const renderLessonNavButton = (lesson: Course['lessons'][number], idx: number) => {
-    const canNavigate = unlockedLessonIds.has(lesson.id);
+  const renderLessonItem = (lesson: Lesson, idx: number) => {
+    const isFinished = courseProgress?.lessons?.[lesson.id]?.status === 'completed';
+    const isActive = idx === currentLessonIndex;
     return (
       <button
         key={lesson.id}
-        onClick={() => (canNavigate ? goToLesson(idx) : undefined)}
-        disabled={!canNavigate}
-        className={`w-full text-left p-4 border-b border-white/5 hover:bg-white/5 transition-all flex items-start gap-3 group
-                    ${activeLessonIndex === idx ? 'bg-white/5 border-l-2 border-l-vibe-500' : 'border-l-2 border-l-transparent'}
-                    ${canNavigate ? '' : 'opacity-50 cursor-not-allowed'}
-                `}
+        onClick={() => { setCurrentLessonIndex(idx); setIsSidebarOpen(false); }}
+        className={`w-full text-left p-3 rounded-lg flex items-center justify-between transition-all ${
+          isActive
+            ? 'bg-vibe-primary/20 text-indigo-300 border border-vibe-primary/50'
+            : 'hover:bg-gray-800 text-gray-400'
+        }`}
       >
-        <div
-          className={`mt-0.5 w-6 h-6 rounded flex items-center justify-center text-[10px] font-bold transition-colors
-                    ${activeLessonIndex === idx ? 'bg-vibe-500 text-white shadow-lg shadow-vibe-500/20' : 'bg-slate-800 text-slate-500 group-hover:bg-slate-700'}
-                `}
-        >
-          {idx + 1}
+        <div className="flex items-center gap-3 overflow-hidden">
+          <span className="text-xs font-mono opacity-50 shrink-0">{(idx + 1).toString().padStart(2, '0')}</span>
+          <span className="text-sm font-medium truncate">{lesson.title}</span>
         </div>
-        <div>
-          <h4
-            className={`text-sm font-medium mb-1 transition-colors ${activeLessonIndex === idx ? 'text-white' : 'text-slate-400 group-hover:text-slate-200'}`}
-          >
-            {lesson.title}
-          </h4>
-          <span className="text-[10px] text-slate-600 uppercase tracking-wider font-bold">
-            {lesson.lessonTypeRu ?? lesson.lessonType ?? lesson.type ?? ''}
-          </span>
-        </div>
+        {isFinished ? (
+          <CheckCircle2 size={16} className="text-vibe-success shrink-0" />
+        ) : (
+          <Circle size={16} className="opacity-20 shrink-0" />
+        )}
       </button>
     );
   };
 
-  useEffect(() => {
-    let cancelled = false;
-
-    // If we already have initialProgress with a resume point, we've already set the index.
-    // We still want to fetch the absolute latest, but without showing a full loader if we have data.
-    const hasInitialData = Boolean(initialProgress?.resume_lesson_id || initialProgress?.last_viewed_lesson_id);
-    if (!hasInitialData) {
-      setProgressLoading(true);
-    }
-
-    (async () => {
-      try {
-        const activeJobIsRunning = activeJobStatus === 'running' || activeJobStatus === 'queued';
-
-        // While an HTML job is running, course progress can include a large workspace payload.
-        // After a page refresh this can timeout through the dev proxy and break stream resume.
-        // In that case, fetch only `active_job` and keep the rest from initialProgress.
-        if (hasInitialData && activeJobIsRunning) {
-          const statusProgress = await fetchCourseProgressStatus(course.id);
-          if (cancelled) return;
-
-          const statusActiveJob = (statusProgress as any)?.active_job ?? null;
-          const next = mergeProgressPreservingFailedJob({
-            ...(courseProgressRef.current ?? {}),
-            active_job: statusActiveJob,
-          });
-          courseProgressRef.current = next;
-          setCourseProgress(next);
-          onProgressChange?.(course.id, next);
-          return;
-        }
-
-        const progressData = await fetchCourseProgress(course.id);
-
-        if (cancelled) return;
-        if (progressData) {
-          syncProgress(progressData);
-        }
-
-        const resumeLessonId = progressData?.resume_lesson_id || progressData?.last_viewed_lesson_id;
-        const resumeIndex = resumeLessonId
-          ? course.lessons.findIndex((lesson) => lesson.id === resumeLessonId)
-          : -1;
-
-        if (resumeIndex >= 0) setActiveLessonIndex(resumeIndex);
-      } catch (error) {
-        console.error('Failed to load course progress', error);
-      } finally {
-        if (!cancelled) setProgressLoading(false);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [activeJobStatus, course.id, lessonIdsKey, mergeProgressPreservingFailedJob, onProgressChange, syncProgress]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    void (async () => {
-      const llmLimit = (course as any)?.llmLimit;
-      const required =
-        String(activeLesson.lessonType ?? '').toLowerCase() === 'workshop' &&
-        typeof llmLimit === 'number' &&
-        Number.isFinite(llmLimit) &&
-        llmLimit > 0;
-
-      if (!required) {
-        setCourseQuota(null);
-        setCourseQuotaLoading(false);
-        setCourseQuotaError(null);
-        return;
-      }
-
-      try {
-        setCourseQuotaLoading(true);
-        setCourseQuotaError(null);
-        const quota = await fetchCourseQuota(course.id);
-        if (!cancelled) setCourseQuota(quota);
-      } catch (error) {
-        console.warn('Failed to load course quota', error);
-        if (!cancelled) setCourseQuota(null);
-        if (!cancelled) {
-          const message = describeApiError(error, 'Не удалось проверить лимит запросов.');
-          setCourseQuotaError(message);
-        }
-      } finally {
-        if (!cancelled) setCourseQuotaLoading(false);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [activeLesson.lessonType, course.id, (course as any)?.llmLimit]);
-
-  const isWorkshopLesson = useMemo(
-    () => (activeLesson.lessonType ?? '').toLowerCase() === 'workshop',
-    [activeLesson.lessonType],
-  );
-  const quotaRequired = useMemo(() => {
-    const limit = (course as any)?.llmLimit;
-    return isWorkshopLesson && typeof limit === 'number' && Number.isFinite(limit) && limit > 0;
-  }, [(course as any)?.llmLimit, isWorkshopLesson]);
-  const isLectureLesson = useMemo(
-    () => (activeLesson.lessonType ?? '').toLowerCase() === 'lecture',
-    [activeLesson.lessonType],
-  );
-
-  const activeLessonProgress = useMemo(
-    () => courseProgress?.lessons?.[activeLesson.id],
-    [activeLesson.id, courseProgress?.lessons],
-  );
-
-  const gateContext = useMemo(
-    () => ({
-      ...(courseProgress ?? {}),
-      lesson: activeLessonProgress ?? {},
-      lessons: courseProgress?.lessons ?? {},
-    }),
-    [activeLessonProgress, courseProgress],
-  );
-
-  const evaluateGate = useCallback(
-    (gate: any): boolean => {
-      if (!gate) return true;
-      if (gate && typeof gate === 'object' && Object.keys(gate).length === 0) return true;
-
-      // Если урок уже завершён — не блокируем последующие блоки.
-      if ((activeLessonProgress as any)?.status === 'completed') return true;
-
-      // Нормализуем строковый gate (часто приходит как JSON-строка).
-      let normalizedGate = gate;
-      if (typeof gate === 'string') {
-        try {
-          normalizedGate = JSON.parse(gate);
-        } catch {
-          normalizedGate = gate;
-        }
-      }
-
-      if (normalizedGate && typeof normalizedGate === 'object' && typeof (normalizedGate as any).op === 'string') {
-        const resolvedGate = resolveUnlockPlaceholders(normalizedGate);
-        return evaluateUnlockRule(resolvedGate, gateContext);
-      }
-
-      if (normalizedGate && typeof normalizedGate === 'object' && 'path' in normalizedGate) {
-        const path = typeof (normalizedGate as any).path === 'string' ? (normalizedGate as any).path : '';
-        const value =
-          (normalizedGate as any).equals !== undefined
-            ? (normalizedGate as any).equals
-            : (normalizedGate as any).value !== undefined
-              ? (normalizedGate as any).value
-              : (normalizedGate as any).expected;
-        if (!path) return true;
-        const resolvedGate = resolveUnlockPlaceholders({ op: 'equals', path, value });
-        return evaluateUnlockRule(resolvedGate, gateContext);
-      }
-
-      const resolvedGate = resolveUnlockPlaceholders(normalizedGate);
-      return evaluateUnlockRule(resolvedGate, gateContext);
-    },
-    [activeLessonProgress, evaluateUnlockRule, gateContext, resolveUnlockPlaceholders],
-  );
-
-  const visibleBlocks = useMemo(() => {
-    const { blocks } = activeLessonResolved as any;
-    if (!blocks) return [];
-    const list = Array.isArray(blocks) ? blocks : [blocks];
-    const result: unknown[] = [];
-    let gatePassed = true;
-
-    for (const block of list) {
-      if (block && typeof block === 'object' && (block as any).gate) {
-        const gate = (block as any).gate;
-        gatePassed = evaluateGate(gate);
-        if (!gatePassed) continue;
-      }
-
-      if (gatePassed) {
-        result.push(block);
-      }
-    }
-
-    return result;
-  }, [activeLessonResolved, evaluateGate]);
-
-  const heroSubtitle = useMemo(() => {
-    const hero = visibleBlocks.find(
-      (block) => block && typeof block === 'object' && (block as any).type === 'hero',
+  if (!currentLesson) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <p className="text-gray-500">Уроки не найдены</p>
+      </div>
     );
-    if (hero && typeof (hero as any).subtitle === 'string') {
-      return (hero as any).subtitle as string;
-    }
-    return null;
-  }, [visibleBlocks]);
-
-  const savedPrompt = useMemo(() => {
-    const fromLesson =
-      activeLessonProgress && typeof (activeLessonProgress as any).prompt === 'string'
-        ? (activeLessonProgress as any).prompt
-        : activeLessonProgress && typeof (activeLessonProgress as any).lesson_prompt === 'string'
-          ? (activeLessonProgress as any).lesson_prompt
-          : null;
-
-    const pick = (value: unknown) => {
-      if (typeof value !== 'string') return null;
-      const trimmed = value.trim();
-      return trimmed.length ? trimmed : null;
-    };
-
-    return pick(fromLesson);
-  }, [activeLessonProgress]);
-  const isCtaUnlocked = useMemo(() => {
-    if ((activeLessonProgress as any)?.status === 'completed') return true;
-    const unlockRuleRaw = (activeLessonResolved as any)?.unlock_rule;
-    let unlockRule: any = unlockRuleRaw;
-    if (typeof unlockRuleRaw === 'string') {
-      try {
-        unlockRule = JSON.parse(unlockRuleRaw);
-      } catch {
-        unlockRule = undefined;
-      }
-    }
-
-    if (!unlockRule) return true;
-    const resolvedRule = resolveUnlockPlaceholders(unlockRule);
-    // Evaluate against the full gate context, not just lesson progress, so rules that
-    // reference course-level fields (e.g. active_job.*) work.
-    return evaluateUnlockRule(resolvedRule, gateContext);
-  }, [activeLessonResolved, activeLessonProgress, evaluateUnlockRule, gateContext, resolveUnlockPlaceholders]);
-
-  const ctaData = useMemo(() => extractCtaData(visibleBlocks), [visibleBlocks]);
-  const isFinishCta = useMemo(() => (ctaData.action ?? '').toLowerCase() === 'finish', [ctaData.action]);
-
-  const quizBlock = useMemo(() => {
-    const extract = (block: unknown) => {
-      if (block && typeof block === 'object' && (block as any).type === 'quiz') {
-        const quizId =
-          typeof (block as any).id === 'string'
-            ? (block as any).id
-            : typeof (block as any).quizId === 'string'
-              ? (block as any).quizId
-              : typeof (block as any).quiz_id === 'string'
-                ? (block as any).quiz_id
-                : null;
-        const title = typeof (block as any).title === 'string' ? (block as any).title : null;
-        const question = typeof (block as any).question === 'string' ? (block as any).question : null;
-        const note = typeof (block as any).note === 'string' ? (block as any).note : null;
-        const options = Array.isArray((block as any).options)
-          ? ((block as any).options as unknown[]).filter((opt) => typeof opt === 'string') as string[]
-          : null;
-        return { id: quizId ?? 'default', title, question, note, options };
-      }
-      return null;
-    };
-
-    for (const block of visibleBlocks) {
-      const value = extract(block);
-      if (value) return value;
-    }
-    return null;
-  }, [visibleBlocks]);
-
-  useEffect(() => {
-    if (!quizBlock?.options) {
-      setQuizAnswer(null);
-      return;
-    }
-
-    const lessonProgress = courseProgress?.lessons?.[activeLesson.id];
-    const saved = lessonProgress?.quiz_answers?.[quizBlock.id ?? 'default'];
-    if (saved === undefined || saved === null) {
-      setQuizAnswer(null);
-      return;
-    }
-
-    const matchedByValue = quizBlock.options.findIndex((option) => option === saved);
-    if (matchedByValue >= 0) {
-      setQuizAnswer(matchedByValue);
-      return;
-    }
-
-    if (typeof saved === 'number' && quizBlock.options[saved]) {
-      setQuizAnswer(saved);
-      return;
-    }
-
-    setQuizAnswer(null);
-  }, [activeLesson.id, courseProgress, quizBlock]);
-
-  useEffect(() => {
-    const lessonChanged = activeLesson.id !== lastLessonIdRef.current;
-    lastLessonIdRef.current = activeLesson.id;
-    const hasLiveStream = Boolean(streamControllerRef.current && streamingJobIdRef.current);
-    // Keep SSE stream alive across lesson navigation; abort only on CourseViewer unmount (exit course).
-    const keepStreamAlive = hasLiveStream;
-    const hasSavedHtml = hasStoredFilesResult || Boolean(savedResultHtml && savedResultHtml.trim());
-    const failedMessage =
-      activeJobStatus === 'failed' && isActiveJobForLesson
-        ? GENERIC_LLM_ERROR
-        : null;
-
-    if (activeJobStatus === 'failed' && isActiveJobForLesson) {
-      console.error('LLM job failed', {
-        error: activeJobError,
-        details: activeJobErrorDetails,
-        lessonId: activeLesson.id,
-        jobId: activeJobId,
-      });
-    }
-
-    const initialPrompt = savedPrompt ?? (isPromptLockedForLesson ? activeJobPrompt : '');
-    setPromptInput(initialPrompt);
-    if (keepStreamAlive) {
-      // Keep spinner while we continue streaming the same job
-      setIsSendingPrompt(true);
-    } else {
-      const runningForLesson =
-        (activeJobStatus === 'running' || activeJobStatus === 'queued') && isActiveJobForLesson;
-      const doneForLesson = activeJobStatus === 'done' && isActiveJobForLesson;
-
-      // While a job is running, don't fall back to showing the previous saved HTML:
-      // it makes it look like the generation "stopped" after refresh.
-      setIsSendingPrompt(runningForLesson);
-      if (runningForLesson) {
-        setLlmHtml(null);
-        setLlmText(null);
-        setTypedText('');
-        setLlmError(null);
-        if (lessonChanged) {
-          setLlmOutline(null);
-          setLlmCss(null);
-          setLlmSections({});
-          setLlmSectionOrder([]);
-          llmCssRef.current = null;
-          llmSectionsRef.current = {};
-          llmSectionOrderRef.current = [];
-          llmOutlineRef.current = null;
-        }
-      } else if (doneForLesson) {
-        // Keep the last streamed/polled preview visible until course progress is refreshed.
-        // Otherwise we can briefly show an old stored site right when the job completes.
-        setLlmError(failedMessage);
-      } else {
-        setLlmHtml(hasSavedHtml && !hasStoredFilesResult ? savedResultHtml : null);
-        setLlmText(null);
-        setTypedText('');
-        setLlmError(failedMessage);
-        setLlmOutline(null);
-        setLlmCss(null);
-        setLlmSections({});
-        setLlmSectionOrder([]);
-        llmCssRef.current = null;
-        llmSectionsRef.current = {};
-        llmSectionOrderRef.current = [];
-        llmOutlineRef.current = null;
-      }
-    }
-  }, [
-    activeJobId,
-    activeJobPrompt,
-    activeJobStatus,
-    activeLesson.id,
-    isActiveJobForLesson,
-    activeJobError,
-    activeJobErrorDetails,
-    savedPrompt,
-    isPromptLockedForLesson,
-    savedResultHtml,
-    hasStoredFilesResult,
-  ]);
-
-  useEffect(() => {
-    if (!isPromptLockedForLesson) return;
-    setPromptInput(activeJobPrompt);
-  }, [activeJobPrompt, isPromptLockedForLesson]);
-
-  useEffect(() => {
-    if (!activeJobStatusMessage) return;
-    if (activeJobStatus !== 'running' && activeJobStatus !== 'queued') return;
-    setLlmStatusText((current) => current ?? activeJobStatusMessage);
-  }, [activeJobStatus, activeJobStatusMessage]);
-
-  useEffect(() => {
-    if (!hasCompletedJob) return;
-    if (hasStoredFilesResult) return;
-    if (!savedResultHtml || typeof savedResultHtml !== 'string' || !savedResultHtml.trim()) return;
-    setLlmHtml((current) => (current === savedResultHtml ? current : savedResultHtml));
-    setLlmCss(null);
-    setLlmSections({});
-    setLlmSectionOrder([]);
-    setLlmOutline(null);
-    llmCssRef.current = null;
-    llmSectionsRef.current = {};
-    llmSectionOrderRef.current = [];
-    llmOutlineRef.current = null;
-    setIsSendingPrompt(false);
-    jobStartTimeRef.current = 0;
-    setLlmError(null);
-  }, [hasCompletedJob, hasStoredFilesResult, savedResultHtml]);
-
-  useEffect(
-    () => () => {
-      if (streamControllerRef.current) {
-        streamControllerRef.current.abort();
-        streamControllerRef.current = null;
-      }
-    },
-    [],
-  );
-
-  useEffect(() => {
-    llmCssRef.current = llmCss;
-  }, [llmCss]);
-
-  useEffect(() => {
-    llmSectionsRef.current = llmSections;
-  }, [llmSections]);
-
-  useEffect(() => {
-    llmSectionOrderRef.current = llmSectionOrder;
-  }, [llmSectionOrder]);
-
-  useEffect(() => {
-    llmOutlineRef.current = llmOutline;
-  }, [llmOutline]);
-
-  const examplesBlock = useMemo(() => {
-    const extract = (block: unknown) => {
-      if (block && typeof block === 'object' && (block as any).type === 'examples') {
-        const title = typeof (block as any).title === 'string' ? (block as any).title : null;
-        const tip = typeof (block as any).tip === 'string' ? (block as any).tip : null;
-        const itemsRaw = (block as any).items;
-        const items = Array.isArray(itemsRaw)
-          ? itemsRaw
-            .map((item) => {
-              if (!item || typeof item !== 'object') return null;
-              const label = typeof (item as any).label === 'string' ? (item as any).label : null;
-              const content = typeof (item as any).content === 'string' ? (item as any).content : null;
-              const notes = Array.isArray((item as any).notes)
-                ? ((item as any).notes as unknown[])
-                  .filter((note) => typeof note === 'string')
-                  .map((note) => note as string)
-                : null;
-              if (!label && !content) return null;
-              return { label, content, notes };
-            })
-            .filter(Boolean) as { label: string | null; content: string | null; notes: string[] | null }[]
-          : null;
-        return { title, tip, items };
-      }
-      return null;
-    };
-
-    for (const block of visibleBlocks) {
-      const value = extract(block);
-      if (value) return value;
-    }
-    return null;
-  }, [visibleBlocks]);
-
-  const handleCopyExample = async (text: string | null, idx: number) => {
-    if (!text) return;
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopiedExample(idx);
-      setTimeout(() => setCopiedExample((current) => (current === idx ? null : current)), 1500);
-    } catch {
-      // ignore clipboard errors
-    }
-  };
-
-  const handleCopyPrompt = useCallback(async (text: string | null, idx: number) => {
-    if (!text) return;
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopiedPromptBlock(idx);
-      setTimeout(
-        () => setCopiedPromptBlock((current) => (current === idx ? null : current)),
-        1500,
-      );
-    } catch {
-      // ignore clipboard errors
-    }
-  }, []);
-
-  const handleQuizSelect = useCallback(
-    async (optionIndex: number, optionValue: string | null) => {
-      setQuizAnswer(optionIndex);
-      await applyProgressPatch({
-        op: 'quiz_answer',
-        lessonId: activeLesson.id,
-        quizId: quizBlock?.id ?? 'default',
-        answer: optionValue ?? optionIndex,
-      });
-    },
-    [activeLesson.id, applyProgressPatch, quizBlock?.id],
-  );
-
-  const goToLesson = useCallback(
-    (targetIndex: number, options?: { completeCurrent?: boolean }) => {
-      if (targetIndex < 0 || targetIndex >= course.lessons.length) return;
-      if (targetIndex === activeLessonIndex) return;
-
-      const targetLesson = course.lessons[targetIndex];
-      const targetLessonStatus = courseProgress?.lessons?.[targetLesson.id]?.status;
-      const canAccessTarget = unlockedLessonIds.has(targetLesson.id) || options?.completeCurrent;
-      if (!canAccessTarget) return;
-
-      const currentLesson = course.lessons[activeLessonIndex];
-
-      setActiveLessonIndex(targetIndex);
-      setSidebarOpen(false);
-
-      void (async () => {
-        if (options?.completeCurrent && currentLesson) {
-          await applyProgressPatch({
-            op: 'lesson_status',
-            lessonId: currentLesson.id,
-            status: 'completed',
-            completedAt: new Date().toISOString(),
-          });
-        }
-
-        if (targetLessonStatus !== 'completed') {
-          await applyProgressPatch({
-            op: 'lesson_status',
-            lessonId: targetLesson.id,
-            status: 'in_progress',
-          });
-        }
-
-        await applyProgressPatch({
-          op: 'set_resume',
-          lessonId: targetLesson.id,
-        });
-      })();
-    },
-    [activeLessonIndex, applyProgressPatch, course.lessons, courseProgress?.lessons, unlockedLessonIds],
-  );
-
-  const finishCourse = useCallback(async () => {
-    try {
-      const completedAt = new Date().toISOString();
-      try {
-        const updated = await patchCourseProgress(course.id, {
-          op: 'finish_course',
-          lessonId: activeLesson.id,
-          completedAt,
-        });
-        syncProgress(updated ?? {});
-        return;
-      } catch (error) {
-        const body = error instanceof ApiError ? (error.body as any) : null;
-        const unsupported =
-          body?.error === 'UNKNOWN_PATCH_OP' ||
-          (typeof body?.details === 'string' && body.details.includes('finish_course'));
-        if (!unsupported) throw error;
-      }
-
-      // Back-compat: if backend doesn't support finish_course yet, fall back to completing lessons.
-      const inProgressIds = Object.entries(courseProgress?.lessons ?? {})
-        .filter(([, value]) => (value as any)?.status === 'in_progress')
-        .map(([lessonId]) => lessonId);
-
-      for (const lessonId of inProgressIds) {
-        await applyProgressPatch({
-          op: 'lesson_status',
-          lessonId,
-          status: 'completed',
-          completedAt,
-        });
-      }
-
-      await applyProgressPatch({
-        op: 'lesson_status',
-        lessonId: activeLesson.id,
-        status: 'completed',
-        completedAt,
-      });
-
-      await applyProgressPatch({
-        op: 'set_resume',
-        lessonId: activeLesson.id,
-      });
-    } finally {
-      onBack();
-    }
-  }, [activeLesson.id, applyProgressPatch, course.id, courseProgress?.lessons, onBack, syncProgress]);
-
-  const parseSseEvent = useCallback((rawEvent: string): { event: string; data: string } => {
-    let eventName = 'message';
-    const dataLines: string[] = [];
-
-    rawEvent.split(/\r?\n/).forEach((line) => {
-      const trimmed = line.trim();
-      if (trimmed.startsWith('event:')) {
-        eventName = trimmed.slice('event:'.length).trim();
-      } else if (trimmed.startsWith('data:')) {
-        dataLines.push(trimmed.slice('data:'.length).trim());
-      }
-    });
-
-    return { event: eventName, data: dataLines.join('\n') };
-  }, []);
-
-  const parseJsonSafe = useCallback((value: string) => {
-    try {
-      return JSON.parse(value);
-    } catch {
-      return null;
-    }
-  }, []);
-
-  const extractKeysFromOutline = useCallback((outline: unknown): string[] => {
-    if (!outline) return [];
-    if (Array.isArray(outline)) {
-      return outline
-        .map((item) => {
-          if (typeof item === 'string') return item;
-          if (item && typeof item === 'object') {
-            const candidate = (item as any).key ?? (item as any).id ?? (item as any).name;
-            return typeof candidate === 'string' ? candidate : null;
-          }
-          return null;
-        })
-        .filter((key): key is string => Boolean(key));
-    }
-    if (typeof outline === 'object' && outline !== null && Array.isArray((outline as any).sections)) {
-      return extractKeysFromOutline((outline as any).sections);
-    }
-    return [];
-  }, []);
-
-  const buildHtml = useCallback(
-    (
-      css: string | null,
-      outline: unknown,
-      sections: Record<string, string>,
-      sectionOrder: string[],
-    ): string => {
-      const outlineKeys = extractKeysFromOutline(outline);
-      const orderedKeys =
-        outlineKeys.length > 0
-          ? outlineKeys.filter((key) => sections[key])
-          : sectionOrder.filter((key) => sections[key]);
-      const keysToRender = orderedKeys.length ? orderedKeys : Object.keys(sections);
-
-      const styleTag = css ? `<style>${css}</style>` : '';
-      const body = keysToRender.map((key) => sections[key]).filter(Boolean).join('\n');
-      return [styleTag, body].filter(Boolean).join('\n').trim();
-    },
-    [extractKeysFromOutline],
-  );
-
-  const liveHtmlFromParts = useMemo(
-    () => buildHtml(llmCss ?? null, llmOutline, llmSections, llmSectionOrder),
-    [buildHtml, llmCss, llmOutline, llmSections, llmSectionOrder],
-  );
-
-  const effectiveResultContainer = useMemo(() => {
-    const courseHasResult =
-      (courseProgress as any)?.result && typeof (courseProgress as any).result === 'object';
-    const courseHasWorkspace =
-      courseHasResult &&
-      (((courseProgress as any).result.files &&
-        typeof (courseProgress as any).result.files === 'object' &&
-        !Array.isArray((courseProgress as any).result.files)) ||
-        typeof (courseProgress as any).result.html === 'string');
-    if (courseHasWorkspace) return courseProgress;
-
-    const lessonResultOwner = (courseProgress as any)?.lessons?.[activeLesson.id];
-    const lessonHasResult =
-      lessonResultOwner &&
-      typeof lessonResultOwner === 'object' &&
-      (lessonResultOwner as any).result &&
-      typeof (lessonResultOwner as any).result === 'object';
-    return lessonHasResult ? lessonResultOwner : courseProgress;
-  }, [activeLesson.id, courseProgress]);
-
-  const storedWorkspace = useMemo(() => getWorkspace(effectiveResultContainer), [effectiveResultContainer]);
-
-  const liveSingleHtml = useMemo(() => {
-    const raw = (llmHtml ?? liveHtmlFromParts ?? '').trim();
-    return raw.length > 0 ? raw : null;
-  }, [llmHtml, liveHtmlFromParts]);
-
-  const liveTextOutput = useMemo(() => {
-    const raw = String(llmText ?? '').trim();
-    return raw.length > 0 ? raw : null;
-  }, [llmText]);
-
-  const storedTextOutput = useMemo(() => {
-    const raw = String(savedResultText ?? '').trim();
-    return raw.length > 0 ? raw : null;
-  }, [savedResultText]);
-
-  const effectiveTextOutput = useMemo(() => {
-    if (isSendingPrompt) return liveTextOutput;
-    return liveTextOutput ?? storedTextOutput ?? null;
-  }, [isSendingPrompt, liveTextOutput, storedTextOutput]);
-  const hasRenderableText = Boolean(effectiveTextOutput && effectiveTextOutput.trim().length > 0);
-
-  useEffect(() => {
-    if (typingTimerRef.current) {
-      window.clearTimeout(typingTimerRef.current);
-      typingTimerRef.current = null;
-    }
-    if (!isTextMode) {
-      setTypedText('');
-      return;
-    }
-    if (isSendingPrompt) return;
-    const full = effectiveTextOutput ?? '';
-    if (!full.trim()) {
-      setTypedText('');
-      return;
-    }
-
-    const speed = 14;
-    const chunk = full.length > 2400 ? 4 : full.length > 900 ? 3 : 2;
-    let index = 0;
-
-    const tick = () => {
-      index = Math.min(full.length, index + chunk);
-      setTypedText(full.slice(0, index));
-      if (index < full.length) {
-        typingTimerRef.current = window.setTimeout(tick, speed);
-      }
-    };
-
-    tick();
-
-    return () => {
-      if (typingTimerRef.current) {
-        window.clearTimeout(typingTimerRef.current);
-        typingTimerRef.current = null;
-      }
-    };
-  }, [effectiveTextOutput, isSendingPrompt, isTextMode]);
-
-  const previewWorkspace = useMemo<Workspace>(() => {
-    // If we have live HTML content being generated, it should override or merge into the workspace.
-    if (liveSingleHtml) {
-      // In 'create' mode, we want a clean slate showing only the new index.html.
-      if (activeLessonMode === 'create') {
-        return { files: { 'index.html': liveSingleHtml }, activeFile: 'index.html', source: 'html' };
-      }
-      // For 'edit' or 'add_page', we merge the live version into the existing files.
-      // Note: Currently the system primarily streams into 'index.html' or a single HTML view.
-      const files = { ...storedWorkspace.files, 'index.html': liveSingleHtml };
-      return { files, activeFile: 'index.html', source: storedWorkspace.source };
-    }
-
-    return storedWorkspace;
-  }, [activeLessonMode, liveSingleHtml, storedWorkspace]);
-
-  const previewExtraCss = useMemo(() => {
-    if (liveSingleHtml) return llmCss ?? null;
-    return storedWorkspace.source === 'files' ? null : (llmCss ?? null);
-  }, [liveSingleHtml, llmCss, storedWorkspace.source]);
-
-  const [uiActiveFile, setUiActiveFile] = useState<string>('index.html');
-
-  useEffect(() => {
-    setUiActiveFile((current) => {
-      if (current && Object.prototype.hasOwnProperty.call(previewWorkspace.files, current)) return current;
-      return previewWorkspace.activeFile;
-    });
-  }, [activeLesson.id, previewWorkspace.activeFile, previewWorkspace.files]);
-
-  const hasRenderablePreview = useMemo(() => {
-    if (isTextMode) return false;
-    return Object.values(previewWorkspace.files).some((value) => typeof value === 'string' && value.trim().length > 0);
-  }, [isTextMode, previewWorkspace.files]);
-
-  const setActiveFileRemote = useCallback(
-    async (fileRaw: string) => {
-      const file = normalizeFileHref(fileRaw);
-      if (!file || !Object.prototype.hasOwnProperty.call(previewWorkspace.files, file)) return;
-      if (file === uiActiveFile) return;
-      setUiActiveFile(file);
-      try {
-        const response = await apiFetch<any>('/api/v1/progress/active-file', {
-          method: 'PATCH',
-          body: JSON.stringify({ courseId: course.id, file }),
-        });
-
-        if (response && typeof response === 'object' && typeof (response as any).error === 'string') {
-          throw new Error((response as any).error);
-        }
-
-        const nextProgressCandidate =
-          response && typeof response === 'object' && (response as any).progress && typeof (response as any).progress === 'object'
-            ? ((response as any).progress as CourseProgress)
-            : null;
-        const nextProgress = nextProgressCandidate ?? (await fetchCourseProgress(course.id));
-        syncProgress(nextProgress ?? {});
-      } catch (error) {
-        console.error('Failed to update active file', error);
-        setLlmError(describeApiError(error, GENERIC_RELOAD_ERROR));
-      }
-    },
-    [course.id, previewWorkspace.files, syncProgress, uiActiveFile],
-  );
-
-  const iframeSrcDoc = useMemo(() => {
-    const html = previewWorkspace.files[uiActiveFile] ?? '';
-    const decorated = decorateHtmlForPreview(html, previewExtraCss);
-    return injectIframeRouter(decorated);
-  }, [previewExtraCss, previewWorkspace.files, uiActiveFile]);
-
-  useEffect(() => {
-    const handler = (event: MessageEvent) => {
-      if (event.source !== previewIframeRef.current?.contentWindow) return;
-      // When sandboxed without allow-same-origin, srcdoc iframes have origin "null".
-      // If the sandbox settings change, still accept same-origin messages.
-      if (event.origin !== 'null' && event.origin !== window.location.origin) return;
-      const data = event.data;
-      if (!data || typeof data !== 'object') return;
-      if ((data as any).type !== 'NAVIGATE_FILE') return;
-      const file = typeof (data as any).file === 'string' ? ((data as any).file as string) : null;
-      if (!file) return;
-      void setActiveFileRemote(file);
-    };
-    window.addEventListener('message', handler);
-    return () => window.removeEventListener('message', handler);
-  }, [setActiveFileRemote]);
-
-  const cleanupStream = useCallback(() => {
-    if (streamControllerRef.current) {
-      streamControllerRef.current.abort();
-      streamControllerRef.current = null;
-    }
-    streamingJobIdRef.current = null;
-    streamLastEventAtRef.current = 0;
-  }, []);
-
-  const applyFinalPayload = useCallback(
-    (payload: any, opts?: { final?: boolean }) => {
-      const isFinal = opts?.final ?? true;
-      const payloadSections: Record<string, string> = {};
-      if (payload?.sections && typeof payload.sections === 'object') {
-        Object.entries(payload.sections as Record<string, string | unknown>).forEach(([key, value]) => {
-          if (typeof value === 'string') {
-            const parsedSection = parseJsonSafe(value);
-            if (parsedSection && typeof parsedSection === 'object' && typeof (parsedSection as any).html === 'string') {
-              payloadSections[key] = (parsedSection as any).html as string;
-            } else {
-              payloadSections[key] = value;
-            }
-          } else if (value && typeof value === 'object') {
-            const htmlValue =
-              typeof (value as any).html === 'string'
-                ? (value as any).html
-                : typeof (value as any).content === 'string'
-                  ? (value as any).content
-                  : null;
-            if (htmlValue) {
-              payloadSections[key] = htmlValue;
-            }
-          }
-        });
-      }
-
-      const mergedSections = { ...llmSectionsRef.current, ...payloadSections };
-      llmSectionsRef.current = mergedSections;
-      setLlmSections(mergedSections);
-
-      const nextCss =
-        typeof payload?.css === 'string' ? payload.css : llmCssRef.current;
-      llmCssRef.current = nextCss ?? null;
-      setLlmCss(nextCss ?? null);
-
-      const nextOutline = payload?.outline ?? llmOutlineRef.current;
-      llmOutlineRef.current = nextOutline ?? null;
-      setLlmOutline(nextOutline ?? null);
-
-      const outlineKeys = extractKeysFromOutline(nextOutline);
-      const mergedOrder =
-        outlineKeys.length > 0
-          ? outlineKeys.filter((key) => mergedSections[key])
-          : (() => {
-            const base = [...llmSectionOrderRef.current];
-            Object.keys(payloadSections).forEach((key) => {
-              if (!base.includes(key)) base.push(key);
-            });
-            return base.filter((key) => mergedSections[key]);
-          })();
-      llmSectionOrderRef.current = mergedOrder;
-      setLlmSectionOrder(mergedOrder);
-
-      const htmlFromPayload = typeof payload?.html === 'string' ? payload.html : null;
-      const workspaceFiles = (payload?.result?.files || payload?.files) as Record<string, string> | undefined;
-      const activeFile = (payload?.result?.active_file || payload?.active_file) as string | undefined;
-
-      // Update the progress object's result if we have a full workspace update
-      if (workspaceFiles) {
-        setCourseProgress((prev) => {
-          if (!prev) return prev;
-          const currentResult = (prev as any).result || {};
-          const payloadMeta = (payload?.result?.meta || payload?.meta || {}) as Record<string, any>;
-
-          const next = {
-            ...prev,
-            result: {
-              ...currentResult,
-              files: workspaceFiles,
-              active_file: activeFile || currentResult.active_file || 'index.html',
-              meta: {
-                ...(currentResult.meta || {}),
-                ...payloadMeta,
-              },
-            },
-          };
-          courseProgressRef.current = next as any;
-          return next;
-        });
-
-        // If we switched files or updated the active one, reflect that in UI
-        if (activeFile) {
-          setUiActiveFile(activeFile);
-        }
-      }
-
-      const finalHtml =
-        htmlFromPayload && htmlFromPayload.trim().length > 0
-          ? htmlFromPayload
-          : workspaceFiles && activeFile && workspaceFiles[activeFile]
-            ? workspaceFiles[activeFile]
-            : buildHtml(nextCss ?? null, nextOutline, mergedSections, mergedOrder);
-
-      if (finalHtml?.trim().length) {
-        setLlmHtml(finalHtml);
-
-        // Сохраняем HTML в courseProgress, чтобы он не потерялся при refresh
-        if (!workspaceFiles && htmlFromPayload) {
-          setCourseProgress((prev) => {
-            if (!prev) return prev;
-            const currentResult = (prev as any).result || {};
-            const next = {
-              ...prev,
-              result: {
-                ...currentResult,
-                html: finalHtml,
-              },
-            };
-            courseProgressRef.current = next as any;
-            return next;
-          });
-        }
-      }
-
-      const isTextPayload =
-        payload && typeof payload === 'object'
-          ? ((payload as any).mode === 'text' || (payload as any).type === 'text')
-          : false;
-      const textValue =
-        isTextPayload && typeof (payload as any)?.text === 'string'
-          ? ((payload as any).text as string)
-          : (isTextPayload && typeof (payload as any)?.content === 'string'
-            ? ((payload as any).content as string)
-            : null);
-
-      if (typeof textValue === 'string') {
-        setLlmText(textValue);
-        setCourseProgress((prev) => {
-          if (!prev) return prev;
-          const currentResult = (prev as any).result || {};
-          const next = {
-            ...prev,
-            result: {
-              ...currentResult,
-              text: textValue,
-            },
-          };
-          courseProgressRef.current = next as any;
-          return next;
-        });
-      }
-
-      const errorMessage =
-        typeof payload?.error === 'string'
-          ? payload.error
-          : payload?.error && typeof payload.error === 'object'
-            ? (typeof (payload as any).error.message === 'string'
-              ? (payload as any).error.message
-              : (typeof (payload as any).error.error === 'string' ? (payload as any).error.error : null))
-            : typeof payload?.message === 'string'
-              ? payload.message
-              : null;
-      const errorDetailsRaw =
-        payload?.error && typeof payload.error === 'object'
-          ? ((payload as any).error.details ?? (payload as any).error.error_details ?? null)
-          : null;
-      const errorDetails = typeof errorDetailsRaw === 'string' && errorDetailsRaw.trim()
-        ? errorDetailsRaw.trim()
-        : null;
-      if (errorMessage) {
-        console.error('LLM payload error', { errorMessage, errorDetails, payload });
-        setLlmError(GENERIC_LLM_ERROR);
-      }
-
-      if (isFinal) {
-        setIsSendingPrompt(false);
-        jobStartTimeRef.current = 0;
-        cleanupStream();
-      }
-    },
-    [buildHtml, cleanupStream, extractKeysFromOutline, parseJsonSafe],
-  );
-
-  const handleStreamEvent = useCallback(
-    (incomingEventName: string, data: string) => {
-      streamLastEventAtRef.current = Date.now();
-      const payload = parseJsonSafe(data);
-      const payloadType =
-        payload && typeof payload === 'object' && typeof (payload as any).type === 'string'
-          ? ((payload as any).type as string)
-          : null;
-      const eventName = (incomingEventName || payloadType || 'message').toLowerCase();
-      const extractHtml = (value: string) => {
-        try {
-          const parsed = JSON.parse(value);
-          if (parsed && typeof parsed === 'object' && typeof (parsed as any).html === 'string') {
-            return (parsed as any).html as string;
-          }
-        } catch {
-          // not json, ignore
-        }
-        return value;
-      };
-
-      if (eventName === 'status') {
-        const message =
-          payload && typeof payload === 'object'
-            ? ((payload as any).message ?? (payload as any).content ?? (payload as any).status)
-            : null;
-        if (typeof message === 'string' && message.trim()) {
-          setLlmStatusText(message.trim());
-        }
-        return;
-      }
-
-      if (eventName === 'css') {
-        const cssValue =
-          payload && typeof (payload as any).css === 'string'
-            ? (payload as any).css
-            : payload && typeof (payload as any).content === 'string'
-              ? (payload as any).content
-              : data;
-        llmCssRef.current = cssValue;
-        setLlmCss(cssValue);
-
-        const partialHtml = buildHtml(
-          llmCssRef.current,
-          llmOutlineRef.current,
-          llmSectionsRef.current,
-          llmSectionOrderRef.current,
-        );
-        if (partialHtml) setLlmHtml(partialHtml);
-        return;
-      }
-
-      if (eventName === 'section' || eventName.startsWith('section:')) {
-        const key =
-          eventName === 'section'
-            ? ((payload as any)?.id ?? (payload as any)?.section ?? 'section')
-            : eventName.slice('section:'.length) || (payload as any)?.id || 'section';
-        const html =
-          payload && typeof (payload as any).html === 'string'
-            ? (payload as any).html
-            : payload && typeof (payload as any).content === 'string'
-              ? (payload as any).content
-              : extractHtml(data);
-        const nextSections = { ...llmSectionsRef.current, [key]: html };
-        llmSectionsRef.current = nextSections;
-        setLlmSections(nextSections);
-
-        const nextOrder = llmSectionOrderRef.current.includes(key)
-          ? llmSectionOrderRef.current
-          : [...llmSectionOrderRef.current, key];
-        llmSectionOrderRef.current = nextOrder;
-        setLlmSectionOrder(nextOrder);
-
-        const partialHtml = buildHtml(
-          llmCssRef.current,
-          llmOutlineRef.current,
-          nextSections,
-          nextOrder,
-        );
-        if (partialHtml) setLlmHtml(partialHtml);
-        return;
-      }
-
-      if (eventName === 'text') {
-        const text =
-          payload && typeof (payload as any).text === 'string'
-            ? (payload as any).text
-            : payload && typeof (payload as any).content === 'string'
-              ? (payload as any).content
-              : data;
-        if (typeof text === 'string') setLlmText(text);
-        return;
-      }
-
-      if (eventName === 'html') {
-        applyFinalPayload({
-          ...(payload ?? {}),
-          html:
-            payload && typeof (payload as any).html === 'string'
-              ? (payload as any).html
-              : payload && typeof (payload as any).content === 'string'
-                ? (payload as any).content
-                : extractHtml(data),
-        }, { final: false });
-        return;
-      }
-
-      if (eventName === 'done') {
-        const finalPayload =
-          payload &&
-            typeof payload === 'object' &&
-            typeof (payload as any).html !== 'string' &&
-            typeof (payload as any).content === 'string'
-            ? { ...(payload as any), html: (payload as any).content }
-            : payload ?? {};
-        applyFinalPayload(finalPayload, { final: true });
-        setLocalActiveJobStatus(streamingJobIdRef.current ?? activeJobId, 'done');
-        setLlmStatusText(null);
-        // For edit/add_page jobs the SSE payload may not include full HTML; refresh progress to get updated workspace.
-        void (async () => {
-          try {
-            const refreshedProgress = await fetchCourseProgress(course.id);
-            syncProgress(refreshedProgress ?? {});
-          } catch (progressError) {
-            console.error('Failed to refresh progress after done', progressError);
-          }
-        })();
-        return;
-      }
-
-      if (eventName === 'error') {
-        const detailsRaw = (payload as any)?.details ?? (payload as any)?.error_details ?? null;
-        const details =
-          typeof detailsRaw === 'string'
-            ? detailsRaw
-            : detailsRaw && typeof detailsRaw === 'object'
-              ? JSON.stringify(detailsRaw)
-              : null;
-        const baseMessage =
-          ((payload as any)?.error ?? (payload as any)?.message ?? data) || 'LLM_STREAM_ERROR';
-        const hasRenderablePayload =
-          payload &&
-          typeof payload === 'object' &&
-          (typeof (payload as any).html === 'string' ||
-            typeof (payload as any).css === 'string' ||
-            (payload as any).sections);
-
-        if (hasRenderablePayload) {
-          applyFinalPayload({
-            ...(payload as any),
-            html:
-              (payload as any)?.html && typeof (payload as any).html === 'string'
-                ? (payload as any).html
-                : extractHtml(data),
-          }, { final: true });
-          markLocalActiveJobFailed(streamingJobIdRef.current ?? activeJobId, {
-            code: typeof (payload as any)?.error === 'string' ? (payload as any).error : null,
-            details: typeof details === 'string' ? details : null,
-            message: typeof (payload as any)?.message === 'string' ? (payload as any).message : null,
-          });
-          return;
-        }
-
-        console.error('LLM stream error', {
-          message: typeof baseMessage === 'string' ? baseMessage : String(baseMessage),
-          details,
-          payload,
-        });
-        setLlmError(GENERIC_LLM_ERROR);
-        setIsSendingPrompt(false);
-        jobStartTimeRef.current = 0;
-        cleanupStream();
-        setLlmStatusText(null);
-        markLocalActiveJobFailed(streamingJobIdRef.current ?? activeJobId, {
-          code: typeof (payload as any)?.error === 'string' ? (payload as any).error : null,
-          details: typeof details === 'string' ? details : null,
-          message: typeof (payload as any)?.message === 'string' ? (payload as any).message : null,
-        });
-      }
-    },
-    [
-      activeJobId,
-      applyFinalPayload,
-      buildHtml,
-      cleanupStream,
-      course.id,
-      markLocalActiveJobFailed,
-      parseJsonSafe,
-      setLocalActiveJobStatus,
-      syncProgress,
-    ],
-  );
-
-  const handleStreamEventRef = useRef(handleStreamEvent);
-  useEffect(() => {
-    handleStreamEventRef.current = handleStreamEvent;
-  }, [handleStreamEvent]);
-
-  const parseSseEventRef = useRef(parseSseEvent);
-  useEffect(() => {
-    parseSseEventRef.current = parseSseEvent;
-  }, [parseSseEvent]);
-
-  const startHtmlStream = useCallback(
-    (jobId: string) => {
-      streamingJobIdRef.current = jobId;
-      streamLastEventAtRef.current = Date.now();
-      const controller = new AbortController();
-      streamControllerRef.current = controller;
-
-      const run = async () => {
-        try {
-          const response = await fetch(
-            `${apiBaseUrlRef.current}/api/v1/html/stream?jobId=${encodeURIComponent(jobId)}`,
-            {
-              method: 'GET',
-              signal: controller.signal,
-              credentials: 'include',
-              headers: { Accept: 'text/event-stream' },
-            },
-          );
-
-          if (!response.ok) {
-            throw new Error(`Stream failed: ${response.status} ${response.statusText}`);
-          }
-
-          if (!response.body) {
-            throw new Error('Пустой ответ от LLM при стриминге.');
-          }
-
-          const reader = response.body.getReader();
-          const decoder = new TextDecoder();
-          let buffer = '';
-
-          while (true) {
-            const { value, done } = await reader.read();
-            streamLastEventAtRef.current = Date.now();
-            buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
-            const events = buffer.split('\n\n');
-            buffer = events.pop() ?? '';
-
-            for (const rawEvent of events) {
-              const parsed = parseSseEventRef.current(rawEvent);
-              handleStreamEventRef.current(parsed.event, parsed.data);
-            }
-
-            if (done) break;
-          }
-
-          if (buffer.trim().length > 0) {
-            const parsed = parseSseEventRef.current(buffer);
-            handleStreamEventRef.current(parsed.event, parsed.data);
-          }
-        } catch (error) {
-          if (controller.signal.aborted) return;
-          console.error('HTML stream error', error);
-          // Stream can be unavailable after refresh (e.g. non-sticky backend instances).
-          // Keep the job running UI and fall back to polling progress status.
-          setLlmError(null);
-          setLlmStatusText((current) => current ?? 'Стрим недоступен. Проверяем статус задачи...');
-        } finally {
-          if (!controller.signal.aborted) {
-            if (streamingJobIdRef.current === jobId) {
-              // Mark stream as inactive so the status poller can take over.
-              streamControllerRef.current = null;
-              streamLastEventAtRef.current = 0;
-            }
-          }
-        }
-      };
-
-      void run();
-    },
-    [],
-  );
-
-  const handlePromptSubmit = useCallback(async (options?: { prompt?: string; retryOfJobId?: string; allowWhileSending?: boolean; isAutoRetry?: boolean }) => {
-    const prompt = (options?.prompt ?? promptInput).trim();
-    const allowWhileSending = options?.allowWhileSending === true;
-    const isAutoRetry = options?.isAutoRetry === true;
-    if (!prompt || (isSendingPrompt && !allowWhileSending)) return;
-    if (!activeLessonContent) {
-      setLlmError(
-        activeLessonContentError
-        || 'Контент урока ещё загружается. Подождите пару секунд и попробуйте снова.',
-      );
-      return;
-    }
-    if (!isAutoRetry) {
-      if (quotaRequired && (courseQuotaLoading || !courseQuota)) {
-        setLlmError(courseQuotaError || GENERIC_RELOAD_ERROR);
-        return;
-      }
-      if (courseQuota?.limit != null && courseQuota.remaining === 0) {
-        setLlmError('Лимит запросов для этого курса исчерпан.');
-        return;
-      }
-    }
-
-    cleanupStream();
-    setIsSendingPrompt(true);
-    setLlmError(null);
-    setLlmStatusText(isAutoRetry ? 'Перезапускаем генерацию...' : null);
-    setLlmHtml(null);
-    setLlmText(null);
-    setTypedText('');
-    setLlmCss(null);
-    setLlmSections({});
-    setLlmSectionOrder([]);
-    llmOutlineRef.current = null;
-
-    // Only reset retry count if this is a fresh user-initiated submit (not a retry)
-    if (promptRetryCount === 0) {
-      // Fresh submit - counter already at 0
-    }
-
-    // Re-fetch lesson content without ETag before starting, to avoid stale cached settings (mode).
-    let requestedMode = activeLessonMode;
-    try {
-      const fresh = await fetchLessonContent(activeLesson.id, { bypassCache: true });
-      setActiveLessonContent(fresh);
-      requestedMode = getLessonMode({ ...activeLesson, ...(fresh ?? {}) });
-    } catch (error) {
-      console.warn('Failed to refresh lesson content before start', error);
-    }
-
-    if (requestedMode === 'create') {
-      setUiActiveFile('index.html');
-    }
-
-    try {
-      await applyProgressPatch({
-        op: 'lesson_prompt',
-        lessonId: activeLesson.id,
-        prompt,
-      });
-
-      const response = await apiFetch<{ jobId?: string; outline?: unknown; quota?: CourseQuota }>(
-        '/api/v1/html/start',
-        {
-          method: 'POST',
-          body: JSON.stringify({
-            prompt,
-            lessonId: activeLesson.id,
-            mode: requestedMode,
-            courseId: course.id,
-            retryOfJobId: options?.retryOfJobId,
-          }),
-        },
-      );
-
-      if (response && typeof response === 'object' && typeof (response as any).error === 'string') {
-        throw new Error((response as any).error);
-      }
-
-      if (!response?.jobId) {
-        throw new Error('Сервер не вернул идентификатор задачи генерации.');
-      }
-
-      // Optimistic: mark the job as queued immediately so the loader stays visible
-      // even if the SSE connection can't be established (common after refresh).
-      {
-        const now = new Date().toISOString();
-        jobStartTimeRef.current = Date.now(); // Track start time for progress display
-        const next: CourseProgress = {
-          ...(courseProgressRef.current ?? {}),
-          active_job: {
-            jobId: response.jobId,
-            status: 'queued',
-            lessonId: activeLesson.id,
-            courseId: course.id,
-            prompt,
-            mode: requestedMode,
-            startedAt: now,
-            updatedAt: now,
-          } as any,
-        };
-        courseProgressRef.current = next;
-        setCourseProgress(next);
-        onProgressChange?.(course.id, next);
-      }
-
-      setLlmOutline(response.outline ?? null);
-      if (response.quota && typeof response.quota === 'object') {
-        setCourseQuota(response.quota);
-      }
-      // Removed redundant fetchCourseProgress(course.id) here to prevent "running" -> "queued" flicker
-      // which was causing the streaming effect to abort and restart unnecessarily.
-      startHtmlStream(response.jobId);
-      setPromptRetryCount(0); // Reset retry counter on success
-    } catch (error) {
-      const apiDetails = error instanceof ApiError
-        ? { status: error.status, body: error.body }
-        : null;
-      console.error('Failed to send prompt to LLM', { error, apiDetails });
-
-      // Auto-retry on temporary errors (network, timeout, 5xx)
-      const isRetryableError =
-        error instanceof ApiError
-          ? error.status >= 500 || error.status === 408 || error.status === 429
-          : true; // Network errors are retryable
-
-      if (isRetryableError && promptRetryCount < MAX_PROMPT_RETRIES) {
-        const nextRetry = promptRetryCount + 1;
-        setPromptRetryCount(nextRetry);
-        setLlmStatusText(`Переподключение... (попытка ${nextRetry + 1}/${MAX_PROMPT_RETRIES + 1})`);
-
-        // Retry after 2 seconds
-        setTimeout(() => {
-          handlePromptSubmit();
-        }, 2000);
-      } else {
-        // All retries exhausted or non-retryable error
-        setLlmError(GENERIC_LLM_ERROR);
-        setIsSendingPrompt(false);
-        setLlmStatusText(null);
-        setPromptRetryCount(0);
-        jobStartTimeRef.current = 0;
-      }
-    }
-  }, [
-    activeLesson.id,
-    activeLesson,
-    activeLessonMode,
-    activeLessonContent,
-    activeLessonContentError,
-    applyProgressPatch,
-    cleanupStream,
-    course.id,
-    courseQuota?.limit,
-    courseQuota?.remaining,
-    courseQuotaError,
-    courseQuotaLoading,
-    isSendingPrompt,
-    promptInput,
-    activeJobPrompt,
-    promptRetryCount,
-    quotaRequired,
-    startHtmlStream,
-    syncProgress,
-    onProgressChange,
-  ]);
-
-  // If SSE isn't available (often after refresh), keep UI alive by polling progress status
-  // and fetch full progress once the job is complete.
-  useEffect(() => {
-    const running = activeJobStatus === 'running' || activeJobStatus === 'queued';
-    if (!isSendingPrompt) return;
-    if (!running) return;
-    if (!isActiveJobForLesson) return;
-    if (!activeJobId) return;
-    if (streamControllerRef.current) return;
-
-    let cancelled = false;
-    let inFlight = false;
-
-    progressPollActiveRef.current = true;
-
-    const interval = window.setInterval(() => {
-      if (cancelled || inFlight) return;
-      if (pollBackoffUntilRef.current && Date.now() < pollBackoffUntilRef.current) return;
-      inFlight = true;
-      void (async () => {
-        try {
-          const statusProgress = await fetchCourseProgressStatus(course.id, { skipCache: true });
-          if (cancelled) return;
-          const active = (statusProgress as any)?.active_job ?? null;
-          const jobId =
-            active && typeof active === 'object'
-              ? (active.jobId ?? active.job_id ?? null)
-              : null;
-          const status =
-            active && typeof active === 'object' && typeof active.status === 'string'
-              ? active.status
-              : null;
-
-          // Job changed or cleared - stop polling.
-          if (!jobId || jobId !== activeJobId) {
-            window.clearInterval(interval);
-            return;
-          }
-
-          if (status && status !== 'running' && status !== 'queued') {
-            const error =
-              active && typeof active === 'object' && typeof (active as any).error === 'string'
-                ? (active as any).error
-                : null;
-            if (status === 'failed' && error === 'STALE_HEARTBEAT' && jobId && !autoRetryJobIdsRef.current.has(jobId)) {
-              autoRetryJobIdsRef.current.add(jobId);
-              setLlmStatusText('Генерация зависла. Перезапускаем...');
-              handlePromptSubmit({
-                prompt: (active as any)?.prompt || activeJobPrompt || promptInput,
-                retryOfJobId: jobId,
-                allowWhileSending: true,
-                isAutoRetry: true,
-              });
-              window.clearInterval(interval);
-              return;
-            }
-            const refreshed = await fetchCourseProgress(course.id, { skipCache: true });
-            if (cancelled) return;
-            syncProgress(refreshed ?? {});
-            setIsSendingPrompt(false);
-            jobStartTimeRef.current = 0;
-            setLlmStatusText(null);
-            window.clearInterval(interval);
-          } else {
-            setLlmStatusText((current) => current ?? 'Генерация продолжается...');
-          }
-        } catch (error) {
-          if (error instanceof ApiError && error.status === 429) {
-            pollBackoffUntilRef.current = Date.now() + 30000;
-            setLlmStatusText('Слишком много запросов. Ждём 30 сек…');
-          } else {
-            console.error('Failed to poll progress status', error);
-          }
-        } finally {
-          inFlight = false;
-        }
-      })();
-    }, 15000);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-      progressPollActiveRef.current = false;
-    };
-  }, [
-    activeJobId,
-    activeJobStatus,
-    activeJobPrompt,
-    course.id,
-    handlePromptSubmit,
-    isActiveJobForLesson,
-    isSendingPrompt,
-    promptInput,
-    syncProgress,
-  ]);
-
-  // Prefer polling the in-memory job result (gives partial sections/CSS) to show live progress after refresh.
-  // If the backend instance doesn't have the job (JOB_NOT_FOUND), the progress-status poller above will still work.
-  useEffect(() => {
-    const running = activeJobStatus === 'running' || activeJobStatus === 'queued';
-    if (!isSendingPrompt) return;
-    if (!running) return;
-    if (!isActiveJobForLesson) return;
-    if (!activeJobId) return;
-    if (streamControllerRef.current) return;
-    if (progressPollActiveRef.current) return;
-
-    let cancelled = false;
-    let inFlight = false;
-    let intervalId: number | null = null;
-
-    const tick = async () => {
-      if (cancelled || inFlight) return;
-      if (pollBackoffUntilRef.current && Date.now() < pollBackoffUntilRef.current) return;
-      inFlight = true;
-      try {
-        const result = await apiFetch<any>(`/api/v1/html/result?jobId=${encodeURIComponent(activeJobId)}`);
-        if (cancelled) return;
-        const status = typeof result?.status === 'string' ? result.status : null;
-        if (status === 'done') {
-          applyFinalPayload(result ?? {}, { final: true });
-          setLocalActiveJobStatus(activeJobId, 'done');
-          setLlmStatusText(null);
-          try {
-            const refreshed = await fetchCourseProgress(course.id, { skipCache: true });
-            if (!cancelled) syncProgress(refreshed ?? {});
-          } catch (progressError) {
-            console.error('Failed to refresh progress after done (poll)', progressError);
-          }
-          setIsSendingPrompt(false);
-          jobStartTimeRef.current = 0;
-          if (intervalId != null) window.clearInterval(intervalId);
-          return;
-        }
-        if (status === 'error') {
-          applyFinalPayload(result ?? {}, { final: true });
-          const errorPayload = result?.error;
-          const code = typeof errorPayload === 'string'
-            ? errorPayload
-            : errorPayload && typeof errorPayload === 'object' && typeof errorPayload.error === 'string'
-              ? errorPayload.error
-              : null;
-          const details = errorPayload && typeof errorPayload === 'object' && typeof errorPayload.details === 'string'
-            ? errorPayload.details
-            : null;
-          const msg = errorPayload && typeof errorPayload === 'object' && typeof errorPayload.message === 'string'
-            ? errorPayload.message
-            : null;
-          markLocalActiveJobFailed(activeJobId, { code, details, message: msg });
-          try {
-            const refreshed = await fetchCourseProgress(course.id, { skipCache: true });
-            if (!cancelled) syncProgress(refreshed ?? {});
-          } catch (progressError) {
-            console.error('Failed to refresh progress after error', progressError);
-          }
-          setIsSendingPrompt(false);
-          jobStartTimeRef.current = 0;
-          setLlmStatusText(null);
-          if (intervalId != null) window.clearInterval(intervalId);
-          return;
-        }
-
-        applyFinalPayload(result ?? {}, { final: false });
-        setLlmStatusText((current) => current ?? 'Генерация продолжается...');
-      } catch (error) {
-        if (error instanceof ApiError && error.status === 404) {
-          // Job isn't available on this instance; let the progress-status poller handle it.
-          try {
-            const refreshed = await fetchCourseProgress(course.id, { skipCache: true });
-            if (!cancelled) syncProgress(refreshed ?? {});
-          } catch (progressError) {
-            console.error('Failed to refresh progress after result 404', progressError);
-          }
-          if (intervalId != null) window.clearInterval(intervalId);
-          return;
-        }
-        if (error instanceof ApiError && error.status === 429) {
-          pollBackoffUntilRef.current = Date.now() + 30000;
-          setLlmStatusText('Слишком много запросов. Ждём 30 сек…');
-          if (intervalId != null) window.clearInterval(intervalId);
-          return;
-        }
-        console.error('Failed to poll html result', error);
-      } finally {
-        inFlight = false;
-      }
-    };
-
-    // Call immediately, then every 10s.
-    void tick();
-    intervalId = window.setInterval(() => void tick(), 15000);
-
-    return () => {
-      cancelled = true;
-      if (intervalId != null) window.clearInterval(intervalId);
-    };
-  }, [
-    activeJobId,
-    activeJobStatus,
-    applyFinalPayload,
-    course.id,
-    isActiveJobForLesson,
-    isSendingPrompt,
-    markLocalActiveJobFailed,
-    setLocalActiveJobStatus,
-    syncProgress,
-  ]);
-
-  // If stream stalls (no events) we fall back to /result polling to avoid infinite "Отправляем...".
-  useEffect(() => {
-    if (!isSendingPrompt) return;
-    if (!streamControllerRef.current) return;
-    const jobId = streamingJobIdRef.current;
-    if (!jobId) return;
-
-    const interval = window.setInterval(() => {
-      const lastAt = streamLastEventAtRef.current;
-      if (!lastAt) return;
-      if (Date.now() - lastAt < 20000) return;
-
-      // throttle polls
-      streamLastEventAtRef.current = Date.now();
-      void (async () => {
-        try {
-          const result = await apiFetch<any>(`/api/v1/html/result?jobId=${encodeURIComponent(jobId)}`);
-          const status = typeof result?.status === 'string' ? result.status : null;
-          if (status === 'done') {
-            applyFinalPayload(result ?? {}, { final: true });
-            setLlmStatusText(null);
-          } else if (status === 'error') {
-            const message =
-              typeof result?.error === 'string'
-                ? result.error
-                : 'Ошибка генерации HTML. Попробуйте ещё раз.';
-            setLlmError(message);
-            setIsSendingPrompt(false);
-            jobStartTimeRef.current = 0;
-            cleanupStream();
-            setLlmStatusText(null);
-          } else {
-            setLlmStatusText((current) => current ?? 'Генерация продолжается...');
-          }
-        } catch (error) {
-          console.error('Failed to poll html result', error);
-        }
-      })();
-    }, 1000);
-
-    return () => window.clearInterval(interval);
-  }, [applyFinalPayload, cleanupStream, isSendingPrompt]);
-
-  // On mount, if we have an active job, initialize the heartbeat ref 
-  // to prevent the stall detector from firing before the stream starts.
-  useEffect(() => {
-    if (activeJobId && (activeJobStatus === 'running' || activeJobStatus === 'queued')) {
-      streamLastEventAtRef.current = Date.now();
-    }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    if (activeJobStatus !== 'running' && activeJobStatus !== 'queued') {
-      streamingJobIdRef.current = null;
-      return;
-    }
-    if (!isActiveJobForLesson) return;
-    if (!activeJobId) return;
-
-    // If we are already streaming THIS jobId, don't restart.
-    if (streamingJobIdRef.current === activeJobId) return;
-
-    // IMPORTANT: If we are on mount and just recovered jobId from state, 
-    // we want to start the stream but ONLY if we haven't already.
-    // cleanupStream will abort any existing controller.
-    cleanupStream();
-    setIsSendingPrompt(true);
-    setLlmError(null);
-    startHtmlStream(activeJobId);
-  }, [activeJobId, activeJobStatus, cleanupStream, isActiveJobForLesson, startHtmlStream]);
-
-  useEffect(() => {
-    if (activeJobStatus !== 'done') return;
-    if (!isActiveJobForLesson) return;
-    if (!activeJobId) return;
-    if (storedWorkspace.source === 'files' || hasStoredFilesResult) return;
-    if (savedResultHtml && savedResultHtml.trim()) return;
-    if (isTextMode && savedResultText && savedResultText.trim()) return;
-    if (fetchedResultJobIdRef.current === activeJobId) return;
-
-    // Если джоба завершена давно (> 2 минут), бэкенд уже удалил её из памяти.
-    // Результат либо в savedResultHtml (выше проверка), либо его уже не получить.
-    if (activeJobUpdatedAt) {
-      const updatedTime = new Date(activeJobUpdatedAt).getTime();
-      const ageMinutes = (Date.now() - updatedTime) / 60000;
-      if (ageMinutes > 2) {
-        return; // Старая джоба - бэкенд вернет 404
-      }
-    }
-
-    fetchedResultJobIdRef.current = activeJobId;
-    setIsSendingPrompt(true);
-
-    const loadResult = async () => {
-      try {
-        const result = await apiFetch<any>(
-          `/api/v1/html/result?jobId=${encodeURIComponent(activeJobId)}`,
-        );
-        applyFinalPayload(result ?? {}, { final: true });
-        try {
-          const refreshedProgress = await fetchCourseProgress(course.id);
-          syncProgress(refreshedProgress ?? {});
-        } catch (progressError) {
-          console.error('Failed to refresh progress after result fetch', progressError);
-        }
-      } catch (error) {
-        console.error('Failed to fetch html result', error);
-        // Если джоба не найдена (404), не показываем ошибку - это нормально для старых джоб
-        if (error instanceof ApiError && error.status === 404) {
-          setIsSendingPrompt(false);
-          jobStartTimeRef.current = 0;
-          return;
-        }
-        setLlmError(GENERIC_RELOAD_ERROR);
-        setIsSendingPrompt(false);
-        jobStartTimeRef.current = 0;
-      }
-    };
-
-    void loadResult();
-  }, [
-    activeJobId,
-    activeJobStatus,
-    activeJobUpdatedAt,
-    applyFinalPayload,
-    course.id,
-    isActiveJobForLesson,
-    isTextMode,
-    savedResultHtml,
-    savedResultText,
-    storedWorkspace.source,
-    syncProgress,
-  ]);
-
-  useEffect(() => {
-    if (!savedResultHtml || !savedResultHtml.trim()) return;
-    if (storedWorkspace.source === 'files') return;
-    setLlmHtml((current) => (current === savedResultHtml ? current : savedResultHtml));
-    if (activeJobStatus !== 'running') {
-      setIsSendingPrompt(false);
-      jobStartTimeRef.current = 0;
-    }
-  }, [activeJobStatus, savedResultHtml, storedWorkspace.source]);
-
-  useEffect(() => {
-    if (!isTextMode) return;
-    if (isSendingPrompt) return;
-    if (!savedResultText || !savedResultText.trim()) {
-      setLlmText(null);
-      return;
-    }
-    setLlmText((current) => (current === savedResultText ? current : savedResultText));
-  }, [isSendingPrompt, isTextMode, savedResultText]);
-
-  // Предупреждение при попытке закрыть страницу во время генерации
-  useEffect(() => {
-    if (!isSendingPrompt) return;
-
-    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      e.preventDefault();
-      // Современные браузеры игнорируют кастомное сообщение, но требуют returnValue
-      e.returnValue = 'Идет генерация сайта (~5 минут). Уверены что хотите уйти?';
-      return e.returnValue;
-    };
-
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, [isSendingPrompt]);
-
-  type LessonBlockItem = {
-    key: string;
-    content: string;
-    prompt: string;
-    blockType: string | null;
-    items?: string[] | null;
-    title?: string | null;
-    leftTitle?: string | null;
-    leftContent?: string | null;
-    rightTitle?: string | null;
-    rightContent?: string | null;
-    action?: string | null;
-    description?: string | null;
-    rows?: any[] | null;
-  };
-
-  const blockItems = useMemo<LessonBlockItem[]>(() => {
-    if (!visibleBlocks.length) {
-      const fallbackText = activeLessonContentLoading
-        ? 'Загрузка контента урока...'
-        : activeLessonContentError
-          ? activeLessonContentError
-          : (typeof activeLesson.description === 'string' ? activeLesson.description : '');
-      return [
-        {
-          key: 'fallback-description',
-          content: fallbackText,
-          prompt: '',
-          blockType: null,
-        },
-      ] as LessonBlockItem[];
-    }
-
-    return visibleBlocks
-      .map((block, idx) => {
-        const key = typeof (block as any)?.id === 'string' ? (block as any).id : `block-${idx}`;
-        const blockType = typeof (block as any)?.type === 'string' ? (block as any).type : null;
-        const items =
-          block &&
-            typeof block === 'object' &&
-            blockType === 'list' &&
-            Array.isArray((block as any).items)
-            ? ((block as any).items as unknown[])
-              .filter((item) => typeof item === 'string')
-              .map((item) => (item as string).trimEnd())
-              .filter((item) => item.trim().length > 0)
-            : null;
-        const content =
-          typeof block === 'string'
-            ? block
-            : block && typeof block === 'object' && typeof (block as any).content === 'string'
-              ? (block as any).content
-              : '';
-        const prompt =
-          block && typeof block === 'object' && typeof (block as any).prompt === 'string'
-            ? (block as any).prompt.trim()
-            : '';
-
-        if (blockType === 'divider') {
-          return { key, content: '', prompt: '', blockType, items: null };
-        }
-
-        if (blockType === 'list') {
-          if (!items || items.length === 0) return null;
-          return { key, content, prompt, blockType, items };
-        }
-
-        if (blockType === 'comparison') {
-          return {
-            key,
-            content: '',
-            prompt: '',
-            blockType,
-            title: (block as any).title,
-            leftTitle: (block as any).leftTitle,
-            leftContent: (block as any).leftContent,
-            rightTitle: (block as any).rightTitle,
-            rightContent: (block as any).rightContent,
-          };
-        }
-
-        if (blockType === 'practice_step') {
-          return {
-            key,
-            content,
-            prompt,
-            blockType,
-            action: (block as any).action,
-          };
-        }
-
-        if (blockType === 'reflection_task') {
-          return {
-            key,
-            content,
-            prompt: '',
-            blockType,
-            title: (block as any).title,
-          };
-        }
-
-        if (blockType === 'interactive_table') {
-          return {
-            key,
-            content: '',
-            prompt: '',
-            blockType,
-            title: (block as any).title,
-            description: (block as any).description,
-            rows: Array.isArray((block as any).rows) ? (block as any).rows : [],
-          };
-        }
-
-        if (blockType === 'feedback') {
-          return {
-            key,
-            content: '',
-            prompt: '',
-            blockType,
-          };
-        }
-
-        if (!content && !prompt) return null;
-        return { key, content, prompt, blockType, items: null };
-      })
-      .filter(Boolean) as LessonBlockItem[];
-  }, [activeLesson.description, activeLessonContentError, activeLessonContentLoading, visibleBlocks]);
-
-  // Render the Right Side Content based on Lesson Type
-  const renderRightPanel = () => {
-    switch (activeLesson.type) {
-      case LessonType.INTERACTIVE_ANALYSIS:
-        return <ImageAnalyzer />;
-      case LessonType.INTERACTIVE_EDIT:
-        return <ImageEditor />;
-      case LessonType.VIDEO_TEXT:
-      default:
-        // Default interactive playground for text-based lessons
-        return (
-          <div className="flex flex-col bg-[#050914] border-l border-white/5 h-full relative">
-            <button
-              onClick={() => setIsFullScreen(!isFullScreen)}
-              className="absolute top-4 right-4 z-[60] p-2.5 rounded-xl bg-[#0f172a]/90 border border-white/20 text-white shadow-lg shadow-black/50 hover:bg-vibe-600 hover:border-vibe-500 transition-all backdrop-blur-md group"
-              title={isFullScreen ? 'Свернуть' : 'На весь экран'}
-            >
-              {isFullScreen ? <Minimize className="w-5 h-5 group-hover:scale-90 transition-transform" /> : <Maximize className="w-5 h-5 group-hover:scale-110 transition-transform" />}
-            </button>
-            <div className="flex-1 border-b border-white/5 relative overflow-hidden">
-              {isTextMode ? (
-                <div className="absolute inset-0 flex flex-col">
-                  <div className="flex-1 overflow-y-auto p-6">
-                    {hasRenderableText && (
-                      <div className="animate-in fade-in slide-in-from-bottom-4 duration-700">
-                        <div className="rounded-3xl border border-white/10 bg-white/5 p-6 shadow-2xl backdrop-blur-sm">
-                          <div className="flex items-center gap-2 mb-4">
-                            <span className="text-[9px] uppercase tracking-[0.28em] text-vibe-300 font-bold px-2.5 py-1 rounded-full border border-vibe-500/30 bg-vibe-500/10">
-                              LLM Answer
-                            </span>
-                            <span className="text-[10px] text-slate-500 font-mono">text mode</span>
-                          </div>
-                          <div className="text-sm md:text-base text-slate-200 leading-relaxed whitespace-pre-wrap">
-                            {renderMarkdown(typedText)}
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              ) : (
-                hasRenderablePreview && (
-                  <div className="absolute inset-0 flex flex-col">
-                    <iframe
-                      ref={previewIframeRef}
-                      key={`${activeLesson.id}-${uiActiveFile}`}
-                      srcDoc={iframeSrcDoc}
-                      title="LLM Generated Site"
-                      className="w-full flex-1 bg-black"
-                      sandbox="allow-scripts"
-                    />
-                  </div>
-                )
-              )}
-
-              {/* Enhanced Non-blocking Loading Widget */}
-              {(isSendingPrompt || activeJobStatus === 'running' || activeJobStatus === 'queued') && (
-                <div className="absolute bottom-6 right-6 z-40 w-80 pointer-events-none">
-                  <div className="bg-[#0f172a]/80 backdrop-blur-xl border border-white/10 rounded-2xl p-4 shadow-2xl ring-1 ring-white/5 animate-in fade-in slide-in-from-bottom-4 duration-500 pointer-events-auto">
-                    <div className="flex items-start gap-4">
-                      <div className="relative mt-1">
-                        <div className="w-10 h-10 rounded-xl bg-vibe-500/20 flex items-center justify-center border border-vibe-500/30">
-                          <div className="w-4 h-4 border-2 border-vibe-400 border-t-transparent rounded-full animate-spin"></div>
-                        </div>
-                        <div className="absolute -top-1 -right-1 w-3 h-3 bg-vibe-500 rounded-full animate-pulse border-2 border-[#0f172a]"></div>
-                      </div>
-
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-vibe-400 px-2 py-0.5 rounded-md bg-vibe-500/10 border border-vibe-500/20">
-                            {(() => {
-                              const jobLessonId = activeJobLessonId || activeLesson.id;
-                              const jobLesson = course.lessons.find(l => l.id === jobLessonId);
-                              const mode = jobLesson ? getLessonMode(jobLesson) : activeLessonMode;
-
-                              if (mode === 'create') return 'Создание';
-                              if (mode === 'edit') return 'Редактирование';
-                              if (mode === 'add_page') return 'Добавление';
-                              if (mode === 'text') return 'Текст';
-                              return 'Запрос к vibecoderai';
-                            })()}
-                          </span>
-                          <div className="h-1 w-1 rounded-full bg-slate-600"></div>
-                          <span className="text-[10px] text-slate-400 font-mono truncate">
-                            VibeCoderAi v1.0.4
-                          </span>
-                        </div>
-
-                        <div className="space-y-1.5 mt-3">
-                          <div className="flex justify-between items-center text-[10px] font-mono">
-                            <span className="text-slate-400 truncate max-w-[180px]">
-                              {llmStatusText || (() => {
-                                if (activeJobStatus === 'running') return 'Генерация... (~5 мин)';
-                                if (activeJobStatus === 'queued') {
-                                  if (jobElapsedSeconds > 45) return 'Высокая нагрузка. Ожидайте...';
-                                  if (jobElapsedSeconds > 30) return 'Очередь длинная...';
-                                  return 'В очереди...';
-                                }
-                                return 'Инициализация...';
-                              })()}
-                            </span>
-                            <span className="text-vibe-400 animate-pulse">
-                              {jobElapsedSeconds > 0 ? `${Math.floor(jobElapsedSeconds / 60)}:${String(jobElapsedSeconds % 60).padStart(2, '0')}` : 'Running'}
-                            </span>
-                          </div>
-                          <div className="w-full h-1 bg-white/5 rounded-full overflow-hidden">
-                            <div
-                              className="h-full bg-gradient-to-r from-vibe-600 via-vibe-400 to-vibe-600 animate-progress-glow transform-gpu"
-                              style={{ backgroundSize: '200% 100%' }}
-                            ></div>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {!isSendingPrompt && (!hasRenderablePreview && !isTextMode) && (
-                <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-400 gap-3 p-6 text-center">
-                  <FileText className="w-16 h-16 opacity-20" />
-                  <p className="font-mono text-sm">Waiting for input...</p>
-                  {!isWorkshopLesson && (
-                    <p className="text-xs mt-1 opacity-50">
-                      В этом уроке нет интерактивного задания AI.
-                    </p>
-                  )}
-                </div>
-              )}
-              {!isSendingPrompt && isTextMode && !hasRenderableText && (
-                <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-400 gap-3 p-6 text-center">
-                  <FileText className="w-16 h-16 opacity-20" />
-                  <p className="font-mono text-sm">Waiting for input...</p>
-                  {!isWorkshopLesson && (
-                    <p className="text-xs mt-1 opacity-50">
-                      В этом уроке нет интерактивного задания AI.
-                    </p>
-                  )}
-                </div>
-              )}
-            </div>
-            <div className="h-1/3 p-4 bg-[#02050e] flex flex-col">
-              {llmError && !hasRenderablePreview && (
-                <div className="text-xs text-red-200 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2 mb-2">
-                  {llmError}
-                </div>
-              )}
-              <div className="relative flex-1 mt-1 font-mono group/console">
-                {/* Your Turn Tooltip - Only for Workshop when ready */}
-                {isWorkshopLesson && !isPromptLocked && promptInput.length === 0 && (
-                  <div className="absolute -top-12 left-1/2 -translate-x-1/2 z-50 animate-bounce">
-                    <div className="bg-blue-600 text-white text-[10px] font-bold px-3 py-1.5 rounded-lg shadow-lg shadow-blue-900/40 whitespace-nowrap flex items-center gap-1.5 uppercase tracking-wider relative">
-                      <Sparkles className="w-3 h-3 text-blue-200" />
-                      Твоя очередь
-                      <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-blue-600 rotate-45"></div>
-                    </div>
-                  </div>
-                )}
-
-                <div className={`
-                    absolute inset-0 rounded-xl transition-all duration-300 flex flex-col overflow-hidden bg-[#050914]
-                    ${isWorkshopLesson && !isLectureLesson
-                    ? 'shadow-[0_0_20px_rgba(59,130,246,0.15)] ring-1 ring-blue-500/20'
-                    : 'opacity-80'
-                  }
-                  `}>
-                  {/* Console Header */}
-                  <div className={`
-                      h-8 px-4 flex items-center justify-between border-b transition-colors
-                      ${isWorkshopLesson && !isLectureLesson
-                      ? 'bg-blue-500/5 border-blue-500/20'
-                      : 'bg-white/5 border-white/5'
-                    }
-                    `}>
-                    <div className="flex items-center gap-2">
-                      <div className={`w-1.5 h-1.5 rounded-full ${isWorkshopLesson && !isLectureLesson ? 'bg-blue-500 animate-pulse' : 'bg-slate-600'}`}></div>
-                      <span className={`text-[10px] font-bold uppercase tracking-[0.15em] ${isWorkshopLesson && !isLectureLesson ? 'text-blue-400' : 'text-slate-500'}`}>
-                        Prompt Editor
-                      </span>
-                    </div>
-                    {isWorkshopLesson && quotaRequired && (
-                      <div className="flex items-center gap-2">
-                        <div className={`text-[10px] font-mono px-2 py-0.5 rounded-full border ${courseQuotaLoading ? 'text-slate-400 border-slate-700 bg-slate-800/50' :
-                          courseQuotaError ? 'text-red-400 border-red-500/30 bg-red-500/10' :
-                            !courseQuota ? 'text-slate-400 border-slate-700' :
-                              (courseQuota.remaining ?? 0) === 0 ? 'text-red-400 border-red-500/30 bg-red-500/10' :
-                                'text-blue-300 border-blue-500/30 bg-blue-500/10'
-                          }`}>
-                          {courseQuotaLoading
-                            ? 'Проверяем лимит...'
-                            : courseQuotaError
-                              ? 'Ошибка лимита'
-                              : !courseQuota
-                                ? 'Проверка...'
-                                : `Осталось запросов для курса: ${courseQuota.remaining}`
-                          }
-                        </div>
-                      </div>
-                    )}
-
-                  </div>
-
-                  {/* Console Input Area */}
-                  <div className="flex-1 relative">
-                    <textarea
-                      value={promptInput}
-                      onChange={(e) => setPromptInput(e.target.value)}
-                      disabled={isLectureLesson || isPromptLocked}
-                      className={`
-                          w-full h-full bg-transparent text-sm resize-none font-mono focus:outline-none p-4
-                          placeholder:text-slate-600/50
-                          ${isWorkshopLesson ? 'text-blue-100' : 'text-slate-500'}
-                          ${isLectureLesson ? 'cursor-not-allowed opacity-50' : ''}
-                        `}
-                      placeholder={
-                        isLectureLesson
-                          ? 'Дождитесь начала воркшопа...'
-                          : 'Введите промпт...'
-                      }
-                      spellCheck={false}
-                    />
-
-                    {/* Submit Button */}
-                    <div className="absolute bottom-3 right-3">
-                      {isWorkshopLesson && (
-                        <button
-                          type="button"
-                          onClick={handlePromptSubmit}
-                          disabled={
-                            isSendingPrompt ||
-                            activeLessonContentLoading ||
-                            !activeLessonContent ||
-                            Boolean(activeLessonContentError) ||
-                            (quotaRequired && (courseQuotaLoading || !courseQuota)) ||
-                            (courseQuota?.limit != null && courseQuota.remaining === 0) ||
-                            promptInput.trim().length === 0
-                          }
-                          className={`
-                              px-4 py-2 rounded-lg text-[10px] font-bold uppercase tracking-wider flex items-center gap-2 transition-all duration-300
-                              ${promptInput.trim().length > 0 && !isSendingPrompt
-                              ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/40 hover:bg-blue-500 hover:scale-105 active:scale-95'
-                              : 'bg-white/5 text-slate-500 border border-white/5 cursor-not-allowed'
-                            }
-                            `}
-                        >
-                          {isSendingPrompt ? (
-                            <>
-                              <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                              <span className="opacity-80">Генерация...</span>
-                            </>
-                          ) : (
-                            <>
-                              Создать <Sparkles className={`w-3 h-3 ${promptInput.trim().length > 0 ? 'text-blue-200' : 'text-slate-600'}`} />
-                            </>
-                          )}
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        );
-    }
-  };
+  }
 
   return (
-    <div className="h-screen w-screen flex flex-col bg-void text-white overflow-hidden font-sans">
-      {/* Header */}
-      <header className="h-16 border-b border-white/5 bg-[#050914] flex items-center justify-between px-4 shrink-0 z-30">
-        <div className="flex items-center gap-4">
+    <div className="flex flex-col min-h-screen bg-vibe-dark relative">
+
+      {/* Mobile Sidebar Toggle */}
+      <div className="lg:hidden p-4 border-b border-gray-800 bg-vibe-card flex items-center justify-between sticky top-16 z-30">
+        <span className="font-bold text-white">{currentLessonIndex + 1}. {currentLesson.title}</span>
+        <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 text-gray-400">
+          <Menu size={20} />
+        </button>
+      </div>
+
+      {/* Sidebar */}
+      <div className={`
+        fixed inset-y-0 left-0 z-40 w-80 bg-vibe-card border-r border-gray-800 transform transition-transform duration-300 ease-in-out
+        lg:translate-x-0 lg:top-16 lg:h-[calc(100vh-4rem)]
+        ${isSidebarOpen ? 'translate-x-0 top-0 h-full' : '-translate-x-full lg:translate-x-0'}
+      `}>
+        <div className="h-full flex flex-col p-4 overflow-y-auto custom-scrollbar">
+          <div className="flex items-center justify-between mb-6 lg:hidden">
+            <h2 className="text-xl font-bold text-white">Меню курса</h2>
+            <button onClick={() => setIsSidebarOpen(false)}><Menu size={20} /></button>
+          </div>
+
           <button
             onClick={onBack}
-            className="flex items-center gap-2 text-slate-400 hover:text-white transition-colors text-sm font-bold uppercase tracking-wider hover:bg-white/5 px-3 py-1.5 rounded-lg"
+            className="flex items-center gap-2 text-gray-400 hover:text-white mb-6 transition-colors shrink-0"
           >
-            <ChevronLeft className="w-4 h-4" /> Назад
+            <ChevronLeft size={20} />
+            Назад к курсам
           </button>
-          <div className="h-6 w-px bg-white/10 mx-2 hidden md:block"></div>
-          <div className="hidden md:flex flex-col">
-            <h1 className="font-bold text-lg font-display tracking-tight text-slate-200">{course.title}</h1>
-            {activeModuleTitle ? (
-              <div className="text-[10px] uppercase tracking-widest text-slate-500 font-semibold">
-                Модуль: {activeModuleTitle}
-              </div>
-            ) : null}
-          </div>
-        </div>
-        <div className="flex items-center gap-4">
-          <span className="text-xs text-vibe-400 font-mono px-3 py-1 bg-vibe-500/10 border border-vibe-500/20 rounded-full">
-            Урок {activeLessonIndex + 1} / {course.lessons.length}
-          </span>
-          <button
-            className="md:hidden text-slate-300"
-            onClick={() => setSidebarOpen(!sidebarOpen)}
-          >
-            {sidebarOpen ? <X /> : <Menu />}
-          </button>
-        </div>
-      </header>
 
-      <div className="flex-1 flex overflow-hidden relative">
-        {/* Sidebar (Lesson List) */}
-        <aside className={`
-                absolute md:relative z-20 w-72 bg-[#02050e] border-r border-white/5 h-full transition-transform duration-300 flex flex-col
-                ${sidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
-            `}>
-          <div className="overflow-y-auto h-full pb-20 custom-scrollbar">
-            {sidebarLessonGroups ? (
-              <>
-                {sortedCourseModules.map((module) => {
-                  const items = sidebarLessonGroups.grouped.get(module.id) ?? [];
-                  if (items.length === 0) return null;
-                  const groupId = `module:${module.id}`;
-                  const collapsed = collapsedSidebarGroups.has(groupId);
-                  return (
-                    <div key={module.id}>
-                      <button
-                        type="button"
-                        onClick={() => toggleSidebarGroup(groupId)}
-                        className="w-full px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-500 bg-[#050914] border-b border-white/5 sticky top-0 z-10 flex items-center justify-between hover:text-slate-300 transition-colors"
-                        aria-expanded={!collapsed}
-                        aria-controls={`sidebar-group-${module.id}`}
-                      >
-                        <span className="truncate">{module.title}</span>
-                        <span className="flex items-center gap-2">
-                          <span className="text-[10px] text-slate-600 font-mono">{items.length}</span>
-                          {collapsed ? <ChevronRight className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                        </span>
-                      </button>
-                      {!collapsed ? (
-                        <div id={`sidebar-group-${module.id}`}>
-                          {items.map(({ lesson, idx }) => renderLessonNavButton(lesson, idx))}
-                        </div>
-                      ) : null}
-                    </div>
-                  );
-                })}
-
-                {sidebarLessonGroups.ungrouped.length > 0 ? (
-                  <div>
-                    {(() => {
-                      const groupId = 'ungrouped';
-                      const collapsed = collapsedSidebarGroups.has(groupId);
-                      return (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() => toggleSidebarGroup(groupId)}
-                            className="w-full px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-500 bg-[#050914] border-b border-white/5 sticky top-0 z-10 flex items-center justify-between hover:text-slate-300 transition-colors"
-                            aria-expanded={!collapsed}
-                            aria-controls="sidebar-group-ungrouped"
-                          >
-                            <span className="truncate">Без модуля</span>
-                            <span className="flex items-center gap-2">
-                              <span className="text-[10px] text-slate-600 font-mono">{sidebarLessonGroups.ungrouped.length}</span>
-                              {collapsed ? (
-                                <ChevronRight className="w-3.5 h-3.5" />
-                              ) : (
-                                <ChevronDown className="w-3.5 h-3.5" />
-                              )}
-                            </span>
-                          </button>
-                          {!collapsed ? (
-                            <div id="sidebar-group-ungrouped">
-                              {sidebarLessonGroups.ungrouped.map(({ lesson, idx }) => renderLessonNavButton(lesson, idx))}
-                            </div>
-                          ) : null}
-                        </>
-                      );
-                    })()}
-                  </div>
-                ) : null}
-              </>
-            ) : (
-              course.lessons.map((lesson, idx) => renderLessonNavButton(lesson, idx))
+          <div className="mb-6 shrink-0">
+            <h2 className="text-xl font-bold text-white mb-1 leading-tight">{course.title}</h2>
+            {isGuest && (
+              <span className="inline-block px-2 py-0.5 mt-2 rounded text-[10px] font-bold bg-gray-700 text-gray-300 border border-gray-600">
+                ГОСТЕВОЙ РЕЖИМ
+              </span>
             )}
           </div>
-        </aside>
 
-        {/* Main Content Area */}
-        <main className="flex-1 flex flex-col md:flex-row h-full overflow-hidden">
+          <div className="space-y-2 pb-8 flex-grow">
+            {renderSidebarLessons()}
+          </div>
+        </div>
+      </div>
 
-          {/* Left Side: Description & Video */}
-          <div ref={lessonContentRef} className="w-full md:w-1/2 overflow-y-auto p-6 md:p-10 custom-scrollbar bg-void">
-            <div className="max-w-3xl mx-auto">
-              <div className="mb-8">
-                <span className="text-vibe-400 text-xs font-bold uppercase tracking-widest mb-2 block">
-                  {activeLesson.lessonTypeRu ?? activeLesson.lessonType ?? activeLesson.type ?? 'Lesson'}
+      {/* Main Content */}
+      <div className="flex-1 w-full lg:pl-80 relative">
+        <div
+          className="max-w-4xl mx-auto p-4 md:p-8 lg:p-12 pb-32"
+          onContextMenu={handleContextMenu}
+        >
+          {/* Lesson Header */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
+            <div>
+              <span className="text-vibe-accent font-mono text-sm uppercase tracking-wider">Урок {currentLessonIndex + 1}</span>
+              <h1 className="text-2xl md:text-3xl font-bold text-white mt-2">{currentLesson.title}</h1>
+            </div>
+
+            <div className="flex items-center gap-3 self-start sm:self-auto">
+              <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full border ${
+                requestsRemaining === 0
+                  ? 'bg-red-900/20 border-red-900/50 text-red-400'
+                  : 'bg-indigo-900/20 border-indigo-500/30 text-indigo-300'
+              }`}>
+                <Zap size={14} className={requestsRemaining > 0 ? "fill-current" : ""} />
+                <span className="text-xs font-bold font-mono">
+                  {isGuest ? '0' : requestsRemaining}/{quotaLimit ?? '∞'}
                 </span>
-                <h2 className="text-3xl md:text-4xl font-bold text-white font-display">{activeLesson.title}</h2>
-                {heroSubtitle && (
-                  <p className="text-slate-300 text-base md:text-lg leading-relaxed mt-3">
-                    {heroSubtitle}
-                  </p>
-                )}
               </div>
 
-              <div className="prose prose-invert prose-lg prose-headings:font-display prose-p:text-slate-400 prose-strong:text-white max-w-none space-y-6">
-                {blockItems.map((block, idx) =>
-                  block.blockType === 'divider' ? (
-                    <div key={block.key} className="not-prose py-2">
-                      <hr className="border-white/10" />
-                    </div>
-                  ) : block.blockType === 'list' ? (
-                    <div key={block.key} className="not-prose">
-                      {block.content && (
-                        <p className="whitespace-pre-line leading-relaxed text-slate-300 mb-3">{renderMarkdown(block.content)}</p>
-                      )}
-                      <ul className="list-disc pl-6 space-y-2 text-slate-300">
-                        {(block.items ?? []).map((item, itemIdx) => (
-                          <li key={itemIdx} className="whitespace-pre-line leading-relaxed">
-                            {renderMarkdown(item)}
-                          </li>
-                        ))}
-                      </ul>
-                      {block.prompt && (
-                        <div className="relative mt-4 p-4 md:p-5 rounded-xl bg-[#0b1020] border border-vibe-500/30">
-                          <button
-                            type="button"
-                            onClick={() => handleCopyPrompt(block.prompt, idx)}
-                            className="absolute -top-3 right-4 text-[9px] md:text-[10px] uppercase tracking-wide px-2.5 py-1.5 rounded-md border border-white/15 text-slate-200 bg-white/5 backdrop-blur-sm hover:bg-white/10 hover:border-vibe-400/40 hover:text-white transition-colors shadow-lg shadow-black/30"
-                            style={{ cursor: 'pointer' }}
-                          >
-                            {copiedPromptBlock === idx ? 'Скопировано' : 'Скопировать'}
-                          </button>
-                          <p className="text-xs md:text-sm text-white whitespace-pre-line leading-relaxed">
-                            {renderMarkdown(block.prompt)}
-                          </p>
-                        </div>
-                      )}
-                    </div>
-                  ) : block.blockType === 'tip' ? (
-                    <div key={block.key} className="not-prose space-y-2">
-                      <p className="text-[11px] uppercase tracking-[0.32em] text-slate-400 font-semibold">
-                        Практические советы
-                      </p>
-                      <div className="relative overflow-hidden rounded-2xl border border-emerald-400/35 bg-gradient-to-br from-[#0c1613] via-[#0a1413] to-[#081012] shadow-lg shadow-emerald-900/30">
-                        <div
-                          className="absolute inset-0 pointer-events-none opacity-40"
-                          style={{
-                            background:
-                              'radial-gradient(circle at 20% 30%, rgba(16,185,129,0.14), transparent 45%), radial-gradient(circle at 85% 20%, rgba(16,185,129,0.18), transparent 40%)',
-                          }}
-                          aria-hidden
-                        />
-                        <div className="relative flex items-start gap-3 p-4 md:p-5">
-                          <div className="mt-0.5 flex h-7 w-7 items-center justify-center rounded-full border border-emerald-500/50 bg-emerald-500/5 text-emerald-400">
-                            <Info className="h-3.5 w-3.5" />
-                          </div>
-                          <p className="text-[16px] md:text-[17px] text-emerald-50 whitespace-pre-line leading-[1.35] font-medium">
-                            {renderMarkdown(block.content)}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  ) : block.blockType === 'comparison' ? (
-                    <div key={block.key} className="not-prose space-y-4 my-10">
-                      {block.title && (
-                        <div className="space-y-1 mb-6">
-                          <p className="text-[10px] uppercase tracking-[0.2em] text-vibe-400 font-bold">Сравнительный анализ</p>
-                          <h3 className="text-2xl font-bold text-white font-display tracking-tight">{block.title}</h3>
-                        </div>
-                      )}
-                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-                        <div className="flex flex-col bg-[#0b1020]/50 border border-white/5 rounded-2xl overflow-hidden backdrop-blur-sm">
-                          {block.leftTitle && (
-                            <div className="px-4 py-2.5 border-b border-white/5 bg-white/5 flex items-center justify-between">
-                              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                                {block.leftTitle}
-                              </span>
-                              <div className="w-1.5 h-1.5 rounded-full bg-slate-500/50"></div>
-                            </div>
-                          )}
-                          <div className="p-5 flex-1">
-                            <div className="text-sm text-slate-400 whitespace-pre-line leading-relaxed">
-                              {renderMarkdown(block.leftContent ?? '')}
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="flex flex-col bg-[#0c1a22]/40 border border-emerald-500/20 rounded-2xl overflow-hidden relative backdrop-blur-sm group">
-                          <div className="absolute inset-0 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-700 bg-[radial-gradient(circle_at_50%_0%,rgba(16,185,129,0.1),transparent_70%)]"></div>
-                          {block.rightTitle && (
-                            <div className="px-4 py-2.5 border-b border-emerald-500/20 bg-emerald-500/10 flex items-center justify-between">
-                              <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400">
-                                {block.rightTitle}
-                              </span>
-                              <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.5)]"></div>
-                            </div>
-                          )}
-                          <div className="p-5 flex-1">
-                            <div className="text-sm text-emerald-50/90 whitespace-pre-line leading-relaxed">
-                              {renderMarkdown(block.rightContent ?? '')}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  ) : block.blockType === 'practice_step' ? (
-                    <div key={block.key} className="not-prose space-y-4 my-8 p-6 rounded-2xl bg-[#080c14] border border-vibe-500/20 shadow-xl shadow-black/40 relative overflow-hidden group">
-                      {/* Decorative background element */}
-                      <div className="absolute top-0 right-0 w-32 h-32 bg-vibe-500/5 blur-3xl rounded-full -mr-16 -mt-16 group-hover:bg-vibe-500/10 transition-colors duration-700"></div>
-
-                      <div className="flex items-center justify-between relative z-10">
-                        <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 rounded-lg bg-vibe-500/20 flex items-center justify-center border border-vibe-500/30">
-                            <Send className="w-4 h-4 text-vibe-400" />
-                          </div>
-                          <div>
-                            <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-vibe-400 block">Практическое задание</span>
-                          </div>
-                        </div>
-                      </div>
-
-                      {block.content && (
-                        <div className="text-slate-300 text-sm md:text-base leading-relaxed relative z-10">
-                          {renderMarkdown(block.content)}
-                        </div>
-                      )}
-
-                      {block.prompt && (
-                        <div className="relative mt-4 p-4 md:p-5 rounded-xl bg-black/40 border border-white/5 backdrop-blur-sm group/prompt">
-                          <button
-                            type="button"
-                            onClick={() => handleCopyPrompt(block.prompt, idx)}
-                            className="absolute -top-3 right-4 text-[9px] md:text-[10px] uppercase tracking-wide px-2.5 py-1.5 rounded-md border border-white/10 text-slate-300 bg-[#0f172a] hover:bg-white/5 hover:border-vibe-400/40 hover:text-white transition-all shadow-lg"
-                            style={{ cursor: 'pointer' }}
-                          >
-                            {copiedPromptBlock === idx ? 'Скопировано' : 'Скопировать промпт'}
-                          </button>
-                          <p className="text-xs md:text-sm text-slate-200 font-mono whitespace-pre-line leading-relaxed">
-                            {renderMarkdown(block.prompt)}
-                          </p>
-                        </div>
-                      )}
-                    </div>
-                  ) : block.blockType === 'reflection_task' ? (
-                    <div key={block.key} className="not-prose space-y-4 my-8 p-6 rounded-2xl bg-indigo-500/5 border border-indigo-500/20 shadow-xl shadow-indigo-900/10 relative overflow-hidden group">
-                      <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-500/10 blur-3xl rounded-full -mr-16 -mt-16 group-hover:bg-indigo-500/20 transition-colors duration-700"></div>
-
-                      <div className="flex items-center gap-3 relative z-10">
-                        <div className="w-8 h-8 rounded-lg bg-indigo-500/20 flex items-center justify-center border border-indigo-500/30">
-                          <Lightbulb className="w-4 h-4 text-indigo-400" />
-                        </div>
-                        <h4 className="text-lg font-bold text-white font-display tracking-tight">{block.title ?? 'Задание на размышление'}</h4>
-                      </div>
-
-                      {block.content && (
-                        <div className="text-slate-300 text-[16px] leading-relaxed relative z-10 ml-1">
-                          {renderMarkdown(block.content)}
-                        </div>
-                      )}
-                    </div>
-                  ) : block.blockType === 'interactive_table' ? (
-                    <div key={block.key} className="not-prose space-y-5 my-10">
-                      <div className="space-y-1">
-                        {block.title && <h3 className="text-2xl font-bold text-white font-display tracking-tight">{block.title}</h3>}
-                        {block.description && <p className="text-sm text-slate-400">{block.description}</p>}
-                      </div>
-
-                      <div className="relative overflow-hidden rounded-2xl border border-white/5 bg-[#080c14] shadow-2xl">
-                        <div className="overflow-x-auto">
-                          <table className="w-full text-left border-collapse">
-                            <thead>
-                              <tr className="border-b border-white/5 bg-white/5">
-                                <th className="px-5 py-4 text-[11px] font-bold uppercase tracking-wider text-slate-400 border-r border-white/5">Элемент</th>
-                                <th className="px-5 py-4 text-[11px] font-bold uppercase tracking-wider text-slate-400 border-r border-white/5">Вопросы</th>
-                                <th className="px-5 py-4 text-[11px] font-bold uppercase tracking-wider text-slate-400">Пример</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {(block.rows ?? []).map((row: any, rIdx: number) => (
-                                <tr key={rIdx} className="border-b last:border-0 border-white/5 hover:bg-white/[0.02] transition-colors">
-                                  <td className="px-5 py-4 text-sm font-bold text-vibe-400 border-r border-white/5 bg-vibe-500/5">{row.element}</td>
-                                  <td className="px-5 py-4 text-sm text-slate-300 border-r border-white/5 leading-relaxed">{row.questions}</td>
-                                  <td className="px-5 py-4 text-sm text-slate-400 font-italic leading-relaxed">
-                                    <div className="pl-3 border-l-2 border-slate-700 italic">
-                                      {row.example}
-                                    </div>
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      </div>
-                    </div>
-                  ) : block.blockType === 'feedback' ? (
-                    <div key={block.key} className="not-prose my-10 p-8 rounded-3xl bg-gradient-to-br from-[#0c1425] to-[#080c14] border border-white/10 shadow-2xl relative overflow-hidden group">
-                      {/* Decorative background element */}
-                      <div className="absolute -bottom-20 -left-20 w-64 h-64 bg-vibe-500/5 blur-[100px] rounded-full group-hover:bg-vibe-500/10 transition-colors duration-1000"></div>
-
-                      {feedbackSubmitted ? (
-                        <div className="relative z-10 py-10 text-center space-y-4 animate-in fade-in zoom-in duration-500">
-                          <div className="w-16 h-16 bg-emerald-500/20 rounded-full flex items-center justify-center mx-auto border border-emerald-500/30">
-                            <Star className="w-8 h-8 text-emerald-400 fill-emerald-400" />
-                          </div>
-                          <div className="space-y-2">
-                            <h4 className="text-2xl font-bold text-white font-display">Спасибо за отзыв!</h4>
-                            <p className="text-slate-400 text-sm max-w-xs mx-auto">Ваше мнение помогает нам делать курс ещё лучше.</p>
-                          </div>
-                          <div className="pt-2 space-y-3">
-                            <div className="flex items-center justify-center gap-1">
-                              {[1, 2, 3, 4, 5].map((star) => (
-                                <Star
-                                  key={star}
-                                  className={`w-5 h-5 ${feedbackRating >= star ? 'text-yellow-400 fill-yellow-400' : 'text-slate-700'}`}
-                                />
-                              ))}
-                            </div>
-                            {feedbackComment.trim() ? (
-                              <p className="text-slate-300 text-sm max-w-xl mx-auto whitespace-pre-line">{feedbackComment.trim()}</p>
-                            ) : null}
-                            <button
-                              type="button"
-                              onClick={() => setFeedbackSubmitted(false)}
-                              className="mx-auto inline-flex items-center justify-center px-4 py-2 rounded-xl border border-white/10 bg-white/5 text-slate-200 text-sm hover:bg-white/10 transition-colors disabled:opacity-50"
-                              disabled={feedbackLoading}
-                              style={{ cursor: feedbackLoading ? 'default' : 'pointer' }}
-                            >
-                              Редактировать отзыв
-                            </button>
-                            {feedbackSavedAt ? (
-                              <div className="text-xs text-slate-500">
-                                Сохранено: {new Date(feedbackSavedAt).toLocaleString('ru-RU')}
-                              </div>
-                            ) : null}
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="relative z-10 space-y-8">
-                          <div className="text-center space-y-2">
-                            <h3 className="text-2xl font-bold text-white font-display tracking-tight">Как вам этот курс?</h3>
-                            <p className="text-sm text-slate-400">Поставьте оценку и поделитесь впечатлениями</p>
-                          </div>
-
-                          <div className="flex justify-center gap-3">
-                            {[1, 2, 3, 4, 5].map((star) => (
-                              <button
-                                key={star}
-                                type="button"
-                                onClick={() => setFeedbackRating(star)}
-                                disabled={feedbackLoading}
-                                className="group/star p-1 transition-all duration-300 hover:scale-125 focus:outline-none"
-                                style={{ cursor: feedbackLoading ? 'default' : 'pointer' }}
-                              >
-                                <Star
-                                  className={`w-10 h-10 transition-all duration-300 ${feedbackRating >= star
-                                    ? 'text-yellow-400 fill-yellow-400 drop-shadow-[0_0_10px_rgba(250,204,21,0.4)]'
-                                    : 'text-slate-700 hover:text-slate-500'
-                                    }`}
-                                />
-                              </button>
-                            ))}
-                          </div>
-
-                          <div className="space-y-4">
-                            <textarea
-                              value={feedbackComment}
-                              onChange={(e) => setFeedbackComment(e.target.value)}
-                              placeholder="Что вам особенно понравилось или что стоит улучшить?..."
-                              className="w-full h-32 px-5 py-4 rounded-2xl bg-black/40 border border-white/5 text-slate-200 text-sm focus:outline-none focus:border-vibe-500/50 focus:ring-1 focus:ring-vibe-500/50 transition-all resize-none placeholder:text-slate-600"
-                              disabled={feedbackLoading}
-                            />
-                            {feedbackError ? (
-                              <div className="text-sm text-red-200 bg-red-500/10 border border-red-500/20 rounded-2xl px-4 py-3">
-                                {feedbackError}
-                              </div>
-                            ) : null}
-                            <button
-                              type="button"
-                              onClick={() => {
-                                void handleSubmitFeedback();
-                              }}
-                              disabled={feedbackRating === 0 || feedbackLoading}
-                              className="w-full py-4 rounded-2xl bg-vibe-600 text-white font-bold text-sm hover:bg-vibe-500 transition-all shadow-lg shadow-vibe-900/20 disabled:opacity-30 disabled:grayscale disabled:cursor-not-allowed group/btn"
-                              style={{ cursor: feedbackRating > 0 && !feedbackLoading ? 'pointer' : 'default' }}
-                            >
-                              <span className="flex items-center justify-center gap-2">
-                                {feedbackLoading ? 'Сохраняем…' : feedbackRating === 0 ? 'Выберите оценку' : 'Отправить отзыв'}
-                                {feedbackRating > 0 && !feedbackLoading && (
-                                  <ChevronRight className="w-4 h-4 group-hover/btn:translate-x-1 transition-transform" />
-                                )}
-                              </span>
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  ) : (
-                    <div key={block.key} className="space-y-3">
-                      {block.content && (
-                        <p className="whitespace-pre-line leading-relaxed">{renderMarkdown(block.content)}</p>
-                      )}
-                      {block.prompt && (
-                        <div className="relative p-4 md:p-5 rounded-xl bg-[#0b1020] border border-vibe-500/30">
-                          <button
-                            type="button"
-                            onClick={() => handleCopyPrompt(block.prompt, idx)}
-                            className="absolute -top-3 right-4 text-[9px] md:text-[10px] uppercase tracking-wide px-2.5 py-1.5 rounded-md border border-white/15 text-slate-200 bg-white/5 backdrop-blur-sm hover:bg-white/10 hover:border-vibe-400/40 hover:text-white transition-colors shadow-lg shadow-black/30"
-                            style={{ cursor: 'pointer' }}
-                          >
-                            {copiedPromptBlock === idx ? 'Скопировано' : 'Скопировать'}
-                          </button>
-                          <p className="text-xs md:text-sm text-white whitespace-pre-line leading-relaxed">
-                            {renderMarkdown(block.prompt)}
-                          </p>
-                        </div>
-                      )}
-                    </div>
-                  )
-                )}
-              </div>
-
-              {examplesBlock && (
-                <div className="mt-8 p-6 rounded-2xl border border-white/10 bg-white/5 shadow-lg shadow-black/20 space-y-4">
-                  <div className="flex items-start gap-3">
-                    <div className="w-10 h-10 rounded-full bg-purple-500/15 text-purple-200 font-bold flex items-center justify-center border border-purple-500/20 text-lg">
-                      ✦
-                    </div>
-                    <div className="space-y-1">
-                      <p className="text-xs uppercase tracking-wider text-purple-200 font-semibold">Examples</p>
-                      <p className="text-2xl font-display font-semibold text-white leading-tight">
-                        {examplesBlock.title ?? 'Примеры'}
-                      </p>
-                      {examplesBlock.tip && (
-                        <p className="text-sm text-slate-300 whitespace-pre-line leading-relaxed max-w-3xl">
-                          {examplesBlock.tip}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-
-                  {examplesBlock.items && examplesBlock.items.length > 0 && (
-                    <div className="space-y-3">
-                      {examplesBlock.items.map((item, idx) => {
-                        const label = (item.label ?? '').toLowerCase();
-                        const isBad = label.includes('плох');
-                        const accentClasses = isBad
-                          ? 'bg-[#0b1020] border-slate-700/40 text-slate-200'
-                          : 'bg-[#0c1a22] border-teal-500/25 text-teal-100';
-                        const badgeClasses = isBad
-                          ? 'bg-slate-700/40 text-slate-200 border border-slate-500/40'
-                          : 'bg-teal-500/20 text-teal-100 border border-teal-400/30';
-                        const noteColor = isBad ? 'text-slate-400' : 'text-teal-100/80';
-
-                        return (
-                          <div
-                            key={idx}
-                            className={`p-4 rounded-xl border ${accentClasses} space-y-2`}
-                          >
-                            <div className="flex items-center gap-2">
-                              {item.label && (
-                                <span className={`text-xs font-semibold uppercase tracking-wide px-2 py-1 rounded-full ${badgeClasses}`}>
-                                  {item.label}
-                                </span>
-                              )}
-                            </div>
-                            {item.content && (
-                              <div className="rounded-lg bg-white/5 px-3 py-2 border border-white/5 relative">
-                                <button
-                                  type="button"
-                                  onClick={() => handleCopyExample(item.content, idx)}
-                                  className="absolute top-2 right-2 text-[11px] uppercase tracking-wide px-2 py-1 rounded-md border border-white/10 text-slate-300 hover:border-vibe-400/40 hover:text-white transition-colors"
-                                  style={{ cursor: item.content ? 'pointer' : 'default' }}
-                                >
-                                  {copiedExample === idx ? 'Скопировано' : 'Копировать'}
-                                </button>
-                                <p className="text-sm text-white whitespace-pre-line leading-relaxed max-w-3xl pr-16">
-                                  {item.content}
-                                </p>
-                              </div>
-                            )}
-                            {item.notes && item.notes.length > 0 && (
-                              <ul className="space-y-1.5 text-sm leading-snug list-disc list-inside">
-                                {item.notes.map((note, noteIdx) => (
-                                  <li key={noteIdx} className={noteColor}>
-                                    {note}
-                                  </li>
-                                ))}
-                              </ul>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
+              {currentLesson.duration && (
+                <div className="text-gray-500 font-mono text-sm border border-gray-700 px-3 py-1 rounded-full whitespace-nowrap">
+                  {currentLesson.duration}
                 </div>
               )}
-
-              {quizBlock && (
-                <div className="mt-8 p-6 rounded-2xl border border-white/10 bg-white/5 shadow-lg shadow-black/20">
-                  <div className="flex items-start gap-3 mb-3">
-                    <div className="w-10 h-10 rounded-full bg-vibe-500/15 text-vibe-300 font-bold flex items-center justify-center border border-vibe-500/20">
-                      ?
-                    </div>
-                    <div>
-                      <p className="text-xs uppercase tracking-wider text-vibe-300 font-bold mb-1">Quiz</p>
-                      <p className="text-xl font-display text-white leading-tight">
-                        {quizBlock.title ?? 'Мини-эксперимент'}
-                      </p>
-                    </div>
-                  </div>
-                  {quizBlock.question && (
-                    <p className="text-slate-300 whitespace-pre-line leading-relaxed">{quizBlock.question}</p>
-                  )}
-                  {quizBlock.options && quizBlock.options.length > 0 && (
-                    <div className="mt-4 space-y-2">
-                      {quizBlock.options.map((option, idx) => (
-                        <button
-                          key={idx}
-                          type="button"
-                          onClick={() => handleQuizSelect(idx, option)}
-                          className={`w-full text-left px-4 py-3 rounded-xl border transition-colors ${quizAnswer === idx
-                            ? 'bg-green-500/10 border-green-400/40 text-green-100'
-                            : 'bg-[#070c18] border-white/5 text-slate-200 hover:border-vibe-500/30 hover:bg-white/5'
-                            }`}
-                          style={{ cursor: 'pointer' }}
-                        >
-                          <span className="text-sm">{option}</span>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                  {quizBlock.note && (
-                    <div className="mt-4 text-xs text-slate-400 italic">Note: {quizBlock.note}</div>
-                  )}
-                </div>
-              )}
-
-              <div className="mt-12 flex justify-between items-center pt-8 border-t border-white/10">
-                <button
-                  disabled={activeLessonIndex === 0}
-                  onClick={() => goToLesson(activeLessonIndex - 1)}
-                  className="px-5 py-2.5 rounded-xl border border-white/10 text-slate-400 disabled:opacity-30 hover:bg-white/5 transition-colors font-bold text-sm"
-                >
-                  Предыдущий
-                </button>
-                <button
-                  disabled={(!isFinishCta && activeLessonIndex === course.lessons.length - 1) || !isCtaUnlocked}
-                  onClick={() => (isFinishCta ? finishCourse() : goToLesson(activeLessonIndex + 1, { completeCurrent: true }))}
-                  className="px-6 py-2.5 rounded-xl bg-vibe-600 text-white font-bold hover:bg-vibe-500 transition-colors shadow-lg shadow-vibe-900/20 disabled:opacity-50 text-sm flex items-center gap-2"
-                >
-                  {ctaData.buttonText ?? 'Следующий'} <ChevronRight className="w-4 h-4" />
-                </button>
-              </div>
             </div>
           </div>
 
-          {/* Right Side: Interactive Window */}
-          <div className={`border-t md:border-t-0 md:border-l border-white/5 bg-[#050914] shadow-2xl transition-all duration-300 ${isFullScreen ? 'fixed inset-0 z-[100] w-full h-full' : 'w-full md:w-1/2 h-1/2 md:h-full z-10 relative'}`}>
-            {/* IDE Header Decoration */}
-            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-vibe-500/50 to-transparent"></div>
-            {renderRightPanel()}
+          {/* Lesson Blocks (copy-protected) */}
+          <div
+            ref={protectedRef}
+            className="prose prose-invert max-w-none mb-12"
+            style={{ userSelect: 'none', WebkitUserSelect: 'none' }}
+          >
+            {blocksLoading ? (
+              <div className="flex justify-center py-16">
+                <Loader2 className="w-8 h-8 text-vibe-primary animate-spin" />
+              </div>
+            ) : lessonBlocks.length > 0 ? (
+              lessonBlocks.map((block, index) => renderBlock(block, index))
+            ) : (
+              <div className="text-center py-16 text-gray-500">
+                <p>Контент урока загружается...</p>
+              </div>
+            )}
           </div>
 
-        </main>
+          {/* Navigation Footer */}
+          <div className="flex flex-col sm:flex-row justify-between items-center pt-8 border-t border-gray-800 gap-4">
+            <button
+              disabled={currentLessonIndex === 0}
+              onClick={() => setCurrentLessonIndex(prev => prev - 1)}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 self-start sm:self-auto ${
+                currentLessonIndex === 0 ? 'opacity-0 cursor-default' : 'text-gray-400 hover:text-white hover:bg-gray-800'
+              }`}
+            >
+              <ChevronLeft size={16} />
+              Предыдущий урок
+            </button>
+
+            <div className="flex flex-col items-end gap-2 w-full sm:w-auto">
+              <button
+                onClick={handleNextAndComplete}
+                className="w-full sm:w-auto px-6 py-3 rounded-xl font-bold text-white shadow-lg transition-all transform hover:scale-105 active:scale-95 flex items-center justify-center gap-2 bg-gradient-to-r from-vibe-primary to-vibe-accent hover:shadow-indigo-500/25"
+              >
+                {currentLessonIndex === lessons.length - 1 ? (
+                  <>
+                    Завершить курс
+                    <CheckCircle2 size={18} />
+                  </>
+                ) : (
+                  <>
+                    {isCompleted ? 'Далее' : 'Завершить и далее'}
+                    <ArrowRight size={18} />
+                  </>
+                )}
+              </button>
+              {isGuest && (
+                <span className="text-[10px] text-gray-500 text-center sm:text-right w-full">
+                  Гостевой режим: прогресс не сохраняется
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Floating AI Trigger */}
+        {showAiTrigger && !showAiHelper && (
+          <button
+            onMouseDown={(e) => { e.preventDefault(); setShowAiHelper(true); }}
+            className="fixed bottom-8 right-8 z-50 bg-gradient-to-r from-vibe-primary to-pink-500 text-white px-4 py-2.5 rounded-full font-bold shadow-xl shadow-pink-500/30 flex items-center gap-2 animate-bounce cursor-pointer hover:scale-105 transition-transform"
+          >
+            <Sparkles size={16} className="fill-white" />
+            Спросить AI
+          </button>
+        )}
+
+        {/* Global AI Button */}
+        {!showAiTrigger && !showAiHelper && user && (
+          <button
+            onClick={() => setShowAiHelper(true)}
+            className="fixed bottom-8 right-8 z-40 bg-gray-800 border border-gray-600 text-gray-300 p-3 rounded-full shadow-lg hover:bg-gray-700 hover:text-white transition-all"
+            title="Vibecoder Assistant"
+          >
+            <Sparkles size={20} />
+          </button>
+        )}
+
+        {/* AI Helper Widget */}
+        <AiHelper
+          isVisible={showAiHelper}
+          onClose={() => setShowAiHelper(false)}
+          selectedText={selection}
+          lessonContext={JSON.stringify(lessonBlocks)}
+          dailyHintsUsed={user?.dailyUsed ?? 0}
+          isPro={user?.isSubscribed ?? false}
+          onUseHint={() => {}}
+        />
       </div>
     </div>
   );
 };
+
+export default CourseViewer;
