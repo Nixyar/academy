@@ -22,6 +22,7 @@ const TIPS = [
   "Разбивайте сложные задачи на цепочку последовательных промптов.",
   "Используйте разделители (###) для четкого отделения инструкций от контекста."
 ];
+const COURSE_CARD_SIZE = 'w-[300px] md:w-[350px] h-[520px]';
 
 const CourseCard = ({
   course,
@@ -49,7 +50,7 @@ const CourseCard = ({
   return (
     <div
       onClick={onClick}
-      className="min-w-[300px] md:min-w-[350px] bg-vibe-card/40 backdrop-blur-md rounded-2xl overflow-hidden border border-gray-800 hover:border-vibe-primary/50 transition-all duration-300 group cursor-pointer relative"
+      className={`${COURSE_CARD_SIZE} bg-vibe-card/40 backdrop-blur-md rounded-2xl overflow-hidden border border-gray-800 hover:border-vibe-primary/50 transition-all duration-300 group cursor-pointer relative flex flex-col`}
     >
       <div className="absolute inset-0 bg-gradient-to-r from-vibe-primary/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none" />
 
@@ -99,7 +100,7 @@ const CourseCard = ({
         </div>
       </div>
 
-      <div className="p-6 relative z-10">
+      <div className="p-6 relative z-10 flex-1 flex flex-col">
         <h3 className="text-xl font-bold text-white mb-2 line-clamp-1 group-hover:text-vibe-primary transition-colors">{course.title}</h3>
         <p className="text-gray-400 text-sm mb-4 line-clamp-2">{course.description}</p>
 
@@ -125,7 +126,7 @@ const CourseCard = ({
           </div>
         )}
 
-        <div className="flex items-center text-sm font-medium text-gray-300 group-hover:text-white transition-colors">
+        <div className="mt-auto flex items-center text-sm font-medium text-gray-300 group-hover:text-white transition-colors">
           {isEnrolled ? (percentage > 0 ? 'Продолжить обучение' : 'Начать обучение') : 'Подробнее о курсе'}
           <ArrowRight size={16} className="ml-2 transform group-hover:translate-x-1 transition-transform" />
         </div>
@@ -174,6 +175,10 @@ const Dashboard: React.FC<DashboardProps> = ({
   const totalCompleted = completedLessonIds.length;
   const globalPercentage = totalLessons > 0 ? Math.round((totalCompleted / totalLessons) * 100) : 0;
   const [showCompleted, setShowCompleted] = useState(false);
+  const activeCourses = courses.filter(c => c.status === 'active');
+  const draftCourses = courses.filter(c => c.status === 'draft');
+  const [draftIndex, setDraftIndex] = useState(0);
+  const [draftVisible, setDraftVisible] = useState(true);
 
   const pieData = [
     { name: 'Пройдено', value: totalCompleted },
@@ -181,12 +186,46 @@ const Dashboard: React.FC<DashboardProps> = ({
   ];
   const pieColors = ['#6366f1', '#1e293b'];
 
+  useEffect(() => {
+    if (draftCourses.length === 0) {
+      setDraftIndex(0);
+      return;
+    }
+    setDraftIndex(Math.floor(Math.random() * draftCourses.length));
+  }, [draftCourses.length]);
+
+  useEffect(() => {
+    if (draftCourses.length <= 1) return;
+
+    let timeoutId: number | null = null;
+    const intervalId = window.setInterval(() => {
+      setDraftVisible(false);
+      timeoutId = window.setTimeout(() => {
+        setDraftIndex(prev => {
+          let next = prev;
+          while (next === prev && draftCourses.length > 1) {
+            next = Math.floor(Math.random() * draftCourses.length);
+          }
+          return next;
+        });
+        setDraftVisible(true);
+      }, 300);
+    }, 10000);
+
+    return () => {
+      window.clearInterval(intervalId);
+      if (timeoutId !== null) window.clearTimeout(timeoutId);
+    };
+  }, [draftCourses.length]);
+
   const displayedCourses = showCompleted
-    ? courses.filter(c => {
+    ? activeCourses.filter(c => {
         const lessonIds = (c.lessons ?? []).map(l => l.id);
         return lessonIds.length > 0 && lessonIds.every(id => completedLessonIds.includes(id));
       })
-    : courses;
+    : activeCourses;
+
+  const draftCourse = draftCourses[draftIndex];
 
   return (
     <div className="relative min-h-screen">
@@ -318,12 +357,18 @@ const Dashboard: React.FC<DashboardProps> = ({
               )}
 
               {!showCompleted && (
-                <div className="snap-start min-w-[300px] md:min-w-[350px] bg-gray-900/30 border-2 border-dashed border-gray-800 rounded-2xl flex flex-col items-center justify-center text-center p-8 group hover:border-gray-700 transition-colors hover:bg-gray-900/50">
-                  <div className="w-16 h-16 rounded-full bg-gray-800 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
-                    <Sparkles className="text-gray-600 group-hover:text-vibe-accent transition-colors" />
+                <div className={`snap-start ${COURSE_CARD_SIZE} bg-gray-900/30 border-2 border-dashed border-gray-800 rounded-2xl flex flex-col items-center justify-center text-center p-8 group hover:border-gray-700 transition-colors hover:bg-gray-900/50`}>
+                  <div className={`w-full transition-opacity duration-300 ${draftVisible ? 'opacity-100' : 'opacity-0'}`}>
+                    <div className="w-16 h-16 rounded-full bg-gray-800 flex items-center justify-center mb-4 mx-auto group-hover:scale-110 transition-transform">
+                      <Sparkles className="text-gray-600 group-hover:text-vibe-accent transition-colors" />
+                    </div>
+                    <h3 className="text-lg font-bold text-gray-500 group-hover:text-gray-300">Скоро</h3>
+                    {draftCourse ? (
+                      <p className="text-sm text-gray-600 mt-2">{draftCourse.title}</p>
+                    ) : (
+                      <p className="text-sm text-gray-600 mt-2">Новые курсы в разработке</p>
+                    )}
                   </div>
-                  <h3 className="text-lg font-bold text-gray-500 group-hover:text-gray-300">Скоро</h3>
-                  <p className="text-sm text-gray-600 mt-2">Генерация видео и <br /> RAG-поиск</p>
                 </div>
               )}
             </div>
