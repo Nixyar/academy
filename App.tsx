@@ -1,896 +1,643 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { LandingPage } from './components/LandingPage';
-import { CourseViewer } from './components/CourseViewer';
-import { AuthModal } from './components/AuthModal';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { promptLibrary } from './data';
+import type { Course, CourseProgress, User } from './types';
+import Dashboard from './components/Dashboard';
+import CourseViewer from './components/CourseViewer';
+import PromptLibrary from './components/PromptLibrary';
+import Profile from './components/Profile';
+import AuthModal from './components/AuthModal';
+import CourseModal from './components/CourseModal';
 import { ConsentModal } from './components/ConsentModal';
-import { PurchaseCourseModal } from './components/PurchaseCourseModal';
-import { PaymentResultModal } from './components/PaymentResultModal';
-import { ProfilePage } from './components/ProfilePage';
 import { AuthCallback } from './components/AuthCallback';
-import { Course, CourseProgress, User } from './types';
-import { logout, me, refreshSession, type BackendProfile } from './services/authApi';
-import { clearSupabaseStoredSession, supabase } from './services/supabaseClient';
-import { userFromProfile } from './services/userFromProfile';
-import { fetchCourseContent, fetchCourses } from './services/coursesApi';
-import { fetchCoursesProgress } from './services/progressApi';
-import { syncTbankCoursePurchase } from './services/paymentsApi';
+import { PaymentResultModal } from './components/PaymentResultModal';
+import { PurchaseCourseModal } from './components/PurchaseCourseModal';
+
+import { refreshSession, me, logout as apiLogout } from './services/authApi';
+import { fetchCourses, fetchCourseContent } from './services/coursesApi';
+import { fetchCoursesProgress, invalidateProgressCache, patchCourseProgress } from './services/progressApi';
 import { fetchPurchasedCourseIds } from './services/purchasesApi';
-import { ApiError } from './services/apiClient';
-import { getRouteSeo } from './src/seo/useRouteSeo';
-import { VibeCodingPage } from './components/VibeCodingPage';
-import { PromptDrivenDevelopmentPage } from './components/PromptDrivenDevelopmentPage';
-import { AiForDevelopersPage } from './components/AiForDevelopersPage';
+import { syncTbankCoursePurchase } from './services/paymentsApi';
+import { supabase, clearSupabaseStoredSession } from './services/supabaseClient';
+import { userFromProfile } from './services/userFromProfile';
 
-type View = 'landing' | 'course' | 'profile' | 'vibe-coding' | 'prompt-driven-development' | 'ai-for-developers';
+import { LayoutDashboard, Library, LogIn, LogOut, User as UserIcon, Loader2 } from 'lucide-react';
 
-type RouteState = {
-  view: View;
-  courseSlug: string | null;
-  landingPath?: '/' | '/courses';
-};
+// =============================================
+// URL Routing helpers
+// =============================================
 
-const normalizeRoute = (route: RouteState): RouteState => {
-  if (route.view === 'course' && !route.courseSlug) {
-    return { view: 'landing', courseSlug: null, landingPath: route.landingPath ?? '/' };
+type AppView = 'dashboard' | 'courses' | 'library' | 'profile' | 'auth-callback';
+
+function parseRoute(pathname: string): { view: AppView; courseSlug?: string } {
+  const p = pathname.replace(/\/+$/, '') || '/';
+  if (p === '/auth/callback') return { view: 'auth-callback' };
+  if (p === '/profile') return { view: 'profile' };
+  if (p === '/library') return { view: 'library' };
+  if (p.startsWith('/courses/')) {
+    const slug = p.replace('/courses/', '');
+    return { view: 'courses', courseSlug: slug };
   }
-  return route;
-};
+  return { view: 'dashboard' };
+}
 
-const parseRouteFromLocation = (): RouteState => {
-  const path = window.location.pathname.replace(/^\//, '');
-  const segments = path.split('/').filter(Boolean);
-
-  if (segments[0] === 'profile') {
-    return { view: 'profile', courseSlug: null };
+function viewToPath(view: AppView, courseSlug?: string): string {
+  switch (view) {
+    case 'profile': return '/profile';
+    case 'library': return '/library';
+    case 'courses': return courseSlug ? `/courses/${courseSlug}` : '/';
+    case 'auth-callback': return '/auth/callback';
+    default: return '/';
   }
+}
 
-  if (segments[0] === 'vibe-coding') {
-    return { view: 'vibe-coding', courseSlug: null };
+function navigateTo(path: string) {
+  if (window.location.pathname !== path) {
+    window.history.pushState(null, '', path);
+    window.dispatchEvent(new Event('locationchange'));
   }
+}
 
-  if (segments[0] === 'prompt-driven-development') {
-    return { view: 'prompt-driven-development', courseSlug: null };
+// =============================================
+// SEO Meta helpers
+// =============================================
+
+function updateMeta(title: string, description: string, noindex = false) {
+  document.title = title;
+  const metaDesc = document.querySelector('meta[name="description"]');
+  if (metaDesc) metaDesc.setAttribute('content', description);
+
+  const ogTitle = document.querySelector('meta[property="og:title"]');
+  if (ogTitle) ogTitle.setAttribute('content', title);
+  const ogDesc = document.querySelector('meta[property="og:description"]');
+  if (ogDesc) ogDesc.setAttribute('content', description);
+  const ogUrl = document.querySelector('meta[property="og:url"]');
+  if (ogUrl) ogUrl.setAttribute('content', window.location.href);
+
+  // Canonical URL
+  let canonical = document.querySelector('link[rel="canonical"]') as HTMLLinkElement | null;
+  if (!canonical) {
+    canonical = document.createElement('link');
+    canonical.rel = 'canonical';
+    document.head.appendChild(canonical);
   }
+  canonical.href = window.location.origin + window.location.pathname;
 
-  if (segments[0] === 'ai-for-developers') {
-    return { view: 'ai-for-developers', courseSlug: null };
+  // Robots meta
+  let robots = document.querySelector('meta[name="robots"]') as HTMLMetaElement | null;
+  if (!robots) {
+    robots = document.createElement('meta');
+    robots.name = 'robots';
+    document.head.appendChild(robots);
   }
+  robots.content = noindex ? 'noindex, nofollow' : 'index, follow';
+}
 
-  if (segments[0] === 'courses') {
-    const slug = segments[1] ? decodeURIComponent(segments[1]) : null;
-    if (!slug) return { view: 'landing', courseSlug: null, landingPath: '/courses' };
-    return { view: 'course', courseSlug: slug };
-  }
-
-  return { view: 'landing', courseSlug: null, landingPath: '/' };
-};
-
-const routeToPath = (route: RouteState): string => {
-  if (route.view === 'profile') return '/profile';
-  if (route.view === 'vibe-coding') return '/vibe-coding/';
-  if (route.view === 'prompt-driven-development') return '/prompt-driven-development/';
-  if (route.view === 'ai-for-developers') return '/ai-for-developers/';
-  if (route.view === 'course' && route.courseSlug) {
-    return `/courses/${encodeURIComponent(route.courseSlug)}`;
-  }
-  return route.landingPath ?? '/';
-};
-
-const ensureMetaTag = (name: string): HTMLMetaElement => {
-  let element = document.head.querySelector(`meta[name="${name}"]`) as HTMLMetaElement | null;
-  if (!element) {
-    element = document.createElement('meta');
-    element.setAttribute('name', name);
-    document.head.appendChild(element);
-  }
-  return element;
-};
-
-const ensureMetaProperty = (property: string): HTMLMetaElement => {
-  let element = document.head.querySelector(`meta[property="${property}"]`) as HTMLMetaElement | null;
-  if (!element) {
-    element = document.createElement('meta');
-    element.setAttribute('property', property);
-    document.head.appendChild(element);
-  }
-  return element;
-};
-
-const removeMetaTag = (name: string) => {
-  document.head.querySelector(`meta[name="${name}"]`)?.remove();
-};
-
-const removeMetaProperty = (property: string) => {
-  document.head.querySelector(`meta[property="${property}"]`)?.remove();
-};
-
-const ensureLinkTag = (rel: string): HTMLLinkElement => {
-  let element = document.head.querySelector(`link[rel="${rel}"]`) as HTMLLinkElement | null;
-  if (!element) {
-    element = document.createElement('link');
-    element.setAttribute('rel', rel);
-    document.head.appendChild(element);
-  }
-  return element;
-};
-
-const removeLinkTag = (rel: string) => {
-  document.head.querySelector(`link[rel="${rel}"]`)?.remove();
-};
-
-const removeJsonLdScripts = () => {
-  document.head.querySelectorAll('script[data-seo-jsonld="1"]').forEach((el) => el.remove());
-};
-
-  const addJsonLdScripts = (objects: unknown[]) => {
-  removeJsonLdScripts();
-  objects.forEach((obj) => {
-    const script = document.createElement('script');
-    script.type = 'application/ld+json';
-    script.setAttribute('data-seo-jsonld', '1');
-    script.text = JSON.stringify(obj);
-    document.head.appendChild(script);
-  });
-};
-
-const OrbitLoader: React.FC<{ label?: string }> = ({ label }) => (
-  <div className="flex flex-col items-center gap-4" role="status" aria-live="polite">
-    <div className="orbit-container">
-      <div className="orbit-inner" />
-      <div className="orbit-outer" />
-    </div>
-    {label ? <div className="text-slate-300 text-sm animate-pulse">{label}</div> : null}
-  </div>
-);
+// =============================================
+// App Component
+// =============================================
 
 const App: React.FC = () => {
-  const initialRoute = useMemo(() => normalizeRoute(parseRouteFromLocation()), []);
-  const [locationPath, setLocationPath] = useState(() => window.location.pathname);
-
-  const [route, setRoute] = useState<RouteState>(initialRoute);
-  const [currentView, setCurrentView] = useState<View>(initialRoute.view);
-  const [selectedCourseId, setSelectedCourseId] = useState<string | null>(null);
-  const [pendingCourseSlug, setPendingCourseSlug] = useState<string | null>(initialRoute.courseSlug);
-  const isAuthCallbackPath =
-    locationPath === '/auth/callback' || locationPath.startsWith('/auth/callback/');
-
-  // Auth State
-  const [user, setUser] = useState<User | null>(null);
-  const [authModalOpen, setAuthModalOpen] = useState(false);
-  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
-  const [bootstrapping, setBootstrapping] = useState(true);
-  const [hasFetchedProfile, setHasFetchedProfile] = useState(false);
-  const [consentModalOpen, setConsentModalOpen] = useState(false);
-  const [purchasedCourseIds, setPurchasedCourseIds] = useState<Set<string>>(() => new Set());
-  const purchasesFetchRef = useRef<Promise<Set<string>> | null>(null);
-  const [purchaseCourse, setPurchaseCourse] = useState<Course | null>(null);
-  const [purchaseModalOpen, setPurchaseModalOpen] = useState(false);
-  const [paymentResult, setPaymentResult] = useState<{ open: boolean; status: 'success' | 'fail' | 'pending' }>({
-    open: false,
-    status: 'pending',
-  });
-  const [hasLoadedProgressList, setHasLoadedProgressList] = useState(false);
-  const [courses, setCourses] = useState<Course[]>([]);
-  const [lessonsLoadingFor, setLessonsLoadingFor] = useState<string | null>(null);
-  const coursesLoadedRef = useRef(false);
-  const bootstrapPromiseRef = useRef<Promise<void> | null>(null);
-  const progressFetchKeyRef = useRef<string | null>(null);
-
-  const syncRoute = (next: RouteState) => {
-    const normalized = normalizeRoute(next);
-    setRoute(normalized);
-    const targetPath = routeToPath(normalized);
-    if (window.location.pathname !== targetPath) {
-      window.history.pushState({}, '', targetPath);
-    }
-  };
-
-  const navigateToLanding = () => {
-    setSelectedCourseId(null);
-    setCurrentView('landing');
-    setPendingCourseSlug(null);
-    syncRoute({ view: 'landing', courseSlug: null, landingPath: '/' });
-  };
-
-  const navigateToProfile = () => {
-    setSelectedCourseId(null);
-    setCurrentView('profile');
-    setPendingCourseSlug(null);
-    syncRoute({ view: 'profile', courseSlug: null });
-  };
-
-  const handleOpenAuth = (mode: 'login' | 'register') => {
-    setAuthMode(mode);
-    setAuthModalOpen(true);
-  };
-
-  const resolveCourseBySlug = useCallback(
-    (slug: string | null) => {
-      if (!slug) return null;
-      return courses.find((c) => c.slug === slug || c.id === slug) ?? null;
-    },
-    [courses],
+  // --- Routing ---
+  const [activeTab, setActiveTab] = useState<AppView>(() => parseRoute(window.location.pathname).view);
+  const [selectedCourseSlug, setSelectedCourseSlug] = useState<string | null>(
+    () => parseRoute(window.location.pathname).courseSlug ?? null
   );
 
-  useEffect(() => {
-    progressFetchKeyRef.current = null;
-    setHasLoadedProgressList(false);
-  }, [user?.id]);
+  // --- Course Modal (preview before starting) ---
+  const [viewingCourseId, setViewingCourseId] = useState<string | null>(null);
+  const [purchasingCourse, setPurchasingCourse] = useState<Course | null>(null);
+
+  // --- Auth ---
+  const [user, setUser] = useState<User | null>(null);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
+  const [consentModalOpen, setConsentModalOpen] = useState(false);
+
+  // --- Data ---
+  const [courses, setCourses] = useState<Course[]>([]);
+  const [purchasedCourseIds, setPurchasedCourseIds] = useState<Set<string>>(new Set());
+  const [courseProgress, setCourseProgress] = useState<Record<string, CourseProgress>>({});
+
+  // --- Loading ---
+  const [bootstrapping, setBootstrapping] = useState(true);
+  const bootstrapRef = useRef(false);
+  const [coursesLoading, setCoursesLoading] = useState(false);
+
+  // --- Payment result ---
+  const [paymentResult, setPaymentResult] = useState<{ open: boolean; status: 'success' | 'fail' | 'pending' }>({ open: false, status: 'pending' });
+
+  // --- Mouse Spotlight ---
+  const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // =============================================
+  // Bootstrap: restore session, load data
+  // =============================================
 
   useEffect(() => {
-    purchasesFetchRef.current = null;
+    if (bootstrapRef.current) return;
+    bootstrapRef.current = true;
+
+    (async () => {
+      try {
+        // Try to restore server session
+        await refreshSession();
+        const profile = await me();
+        const u = userFromProfile(profile);
+        setUser(u);
+
+        // Check consent
+        if (!u.termsAccepted || !u.privacyAccepted) {
+          setConsentModalOpen(true);
+        }
+      } catch {
+        // Not authenticated — that's fine
+        setUser(null);
+      }
+
+      // Load courses (public, no auth needed)
+      try {
+        setCoursesLoading(true);
+        const c = await fetchCourses();
+        setCourses(c);
+      } catch (e) {
+        console.error('Failed to load courses', e);
+      } finally {
+        setCoursesLoading(false);
+      }
+
+      setBootstrapping(false);
+    })();
+  }, []);
+
+  // Load purchases + progress when user appears
+  useEffect(() => {
     if (!user) {
       setPurchasedCourseIds(new Set());
+      setCourseProgress({});
+      invalidateProgressCache();
+      return;
     }
-  }, [user?.id]);
 
-  const markCoursesAsPurchased = useCallback((list: Course[], purchasedIds: Set<string>) => {
-    if (!Array.isArray(list) || list.length === 0 || purchasedIds.size === 0) return list;
-    return list.map((course) => (purchasedIds.has(course.id) ? { ...course, isPurchased: true } : course));
-  }, []);
-
-  const derivePurchasedCourseIds = useCallback((list: Course[]) => {
-    return new Set(
-      (list || [])
-        .filter((course) => Boolean(course?.isPurchased))
-        .map((course) => course.id),
-    );
-  }, []);
-
-  const mergeCoursesPreservingContent = useCallback((prev: Course[], next: Course[]) => {
-    if (!Array.isArray(next) || next.length === 0) return prev;
-    if (!Array.isArray(prev) || prev.length === 0) return next;
-
-    const prevById = new Map(prev.map((course) => [course.id, course]));
-    const nextIds = new Set(next.map((course) => course.id));
-
-    const merged = next.map((course) => {
-      const existing = prevById.get(course.id);
-      if (!existing) return course;
-
-      const mergedCourse: Course = { ...existing, ...course };
-      mergedCourse.lessons = existing.lessons?.length ? existing.lessons : course.lessons;
-      mergedCourse.modules = existing.modules?.length ? existing.modules : course.modules;
-      return mergedCourse;
-    });
-
-    const extras = prev.filter((course) => !nextIds.has(course.id));
-    return extras.length > 0 ? [...merged, ...extras] : merged;
-  }, []);
-
-  const ensurePurchasedCoursesLoaded = useCallback(async () => {
-    if (!user) return new Set<string>();
-    if (purchasesFetchRef.current) return purchasesFetchRef.current;
-
-    const promise = (async () => {
-      const [coursesResult, purchasedResult] = await Promise.allSettled([fetchCourses(), fetchPurchasedCourseIds()]);
-
-      const nextCourses = coursesResult.status === 'fulfilled' ? coursesResult.value : courses;
-      if (coursesResult.status === 'fulfilled') {
-        setCourses((prev) => mergeCoursesPreservingContent(prev, coursesResult.value as Course[]));
-        coursesLoadedRef.current = true;
-      }
-
-      const derivedFromCourses = derivePurchasedCourseIds(nextCourses);
-      const fromPurchasesApi =
-        purchasedResult.status === 'fulfilled'
-          ? new Set(purchasedResult.value.filter((id) => typeof id === 'string' && id.trim()).map((id) => id.trim()))
-          : new Set<string>();
-
-      const merged = new Set<string>([...derivedFromCourses, ...fromPurchasesApi]);
-      setPurchasedCourseIds(merged);
-      if (merged.size > 0) {
-        setCourses((prev) => markCoursesAsPurchased(prev, merged));
-      }
-      return merged;
-    })();
-
-    purchasesFetchRef.current = promise;
-    return promise;
-  }, [user?.id, courses, derivePurchasedCourseIds, markCoursesAsPurchased, mergeCoursesPreservingContent]);
-
-  const refreshPurchasedCourses = useCallback(async () => {
-    purchasesFetchRef.current = null;
-    try {
-      const [currentCourses, purchasedIds] = await Promise.all([fetchCourses(), fetchPurchasedCourseIds()]);
-      setCourses((prev) => mergeCoursesPreservingContent(prev, currentCourses));
-      coursesLoadedRef.current = true;
-
-      const derivedFromCourses = derivePurchasedCourseIds(currentCourses);
-      const fromPurchasesApi = new Set(
-        purchasedIds.filter((id) => typeof id === 'string' && id.trim()).map((id) => id.trim()),
-      );
-      const merged = new Set<string>([...derivedFromCourses, ...fromPurchasesApi]);
-
-      setPurchasedCourseIds(merged);
-      if (merged.size > 0) {
-        setCourses((prev) => markCoursesAsPurchased(prev, merged));
-      }
-      return merged;
-    } catch {
-      return ensurePurchasedCoursesLoaded();
-    }
-  }, [ensurePurchasedCoursesLoaded, derivePurchasedCourseIds, markCoursesAsPurchased, mergeCoursesPreservingContent]);
-
-  useEffect(() => {
-    if (isAuthCallbackPath) return;
-
-    if (coursesLoadedRef.current) return;
-    coursesLoadedRef.current = true;
-
-    async function loadCourses() {
+    (async () => {
       try {
-        const fetched = await fetchCourses();
-        setCourses(fetched);
-      } catch (error) {
-        console.error('Failed to load courses', error);
+        const ids = await fetchPurchasedCourseIds();
+        setPurchasedCourseIds(new Set(ids));
+      } catch { /* ignore */ }
+
+      if (courses.length > 0) {
+        try {
+          const courseIds = courses.map(c => c.id);
+          const progress = await fetchCoursesProgress(courseIds);
+          setCourseProgress(progress);
+        } catch { /* ignore */ }
       }
-    }
-    void loadCourses();
-    return;
-  }, []);
+    })();
+  }, [user, courses]);
+
+  // =============================================
+  // URL routing: sync URL ↔ state
+  // =============================================
 
   useEffect(() => {
     const handleLocationChange = () => {
-      setLocationPath(window.location.pathname);
-      const parsed = normalizeRoute(parseRouteFromLocation());
-      setRoute(parsed);
-      setPendingCourseSlug(parsed.courseSlug);
+      const { view, courseSlug } = parseRoute(window.location.pathname);
+      setActiveTab(view);
+      setSelectedCourseSlug(courseSlug ?? null);
     };
-
-    const originalPushState = window.history.pushState;
-    const originalReplaceState = window.history.replaceState;
-
-    const wrapHistoryMethod = (original: typeof window.history.pushState) => {
-      return (...args: Parameters<typeof window.history.pushState>) => {
-        const result = original.apply(window.history, args);
-        window.dispatchEvent(new Event('locationchange'));
-        return result;
-      };
-    };
-
-    window.history.pushState = wrapHistoryMethod(originalPushState);
-    window.history.replaceState = wrapHistoryMethod(originalReplaceState);
 
     window.addEventListener('popstate', handleLocationChange);
     window.addEventListener('locationchange', handleLocationChange);
-
     return () => {
-      window.history.pushState = originalPushState;
-      window.history.replaceState = originalReplaceState;
       window.removeEventListener('popstate', handleLocationChange);
       window.removeEventListener('locationchange', handleLocationChange);
     };
   }, []);
 
-  useEffect(() => {
-    if (isAuthCallbackPath) return;
-
-    if (bootstrapPromiseRef.current) return;
-
-    bootstrapPromiseRef.current = (async () => {
-      setBootstrapping(true);
-      try {
-        try {
-          await refreshSession();
-        } catch {
-          // Ignore missing/expired sessions; we'll handle it via /me below
-        }
-        const profile = await me();
-        const authedUser = userFromProfile(profile);
-        setUser(authedUser);
-        setHasFetchedProfile(true);
-
-        // If we are on a course route, let's pre-fetch its progress to avoid jumping
-        const currentRoute = normalizeRoute(parseRouteFromLocation());
-        if (currentRoute.view === 'course' && currentRoute.courseSlug) {
-          // We need courses to resolve the slug, but they might not be loaded yet.
-          // Let's load courses first if they aren't.
-          let currentCourses = courses;
-          if (currentCourses.length === 0) {
-            try {
-              currentCourses = await fetchCourses();
-              setCourses(currentCourses);
-              coursesLoadedRef.current = true;
-            } catch (err) {
-              console.error('Failed to load courses during bootstrap', err);
-            }
-          }
-
-          const course = currentCourses.find(c => c.slug === currentRoute.courseSlug || c.id === currentRoute.courseSlug);
-          if (course) {
-              try {
-              const [progressResult, contentResult] = await Promise.allSettled([
-                fetchCoursesProgress([course.id]),
-                fetchCourseContent(course.id),
-              ]);
-
-              if (contentResult.status === 'fulfilled') {
-                const { lessons, modules } = contentResult.value;
-                setCourses(prev =>
-                  prev.map(c => c.id === course.id ? { ...c, lessons, modules } : c),
-                );
-              } else {
-                console.error('Failed to pre-fetch course content', contentResult.reason);
-              }
-
-              if (progressResult.status === 'fulfilled') {
-                const progressMap = progressResult.value;
-                setUser(prev => prev ? {
-                  ...prev,
-                  progress: { ...(prev.progress ?? {}), ...progressMap }
-                } : prev);
-              } else {
-                console.error('Failed to pre-fetch course progress', progressResult.reason);
-              }
-            } catch (err) {
-              console.error('Failed to pre-fetch course data', err);
-            }
-          }
-        }
-      } catch {
-        setUser(null);
-        setHasFetchedProfile(true);
-        const latestRoute = normalizeRoute(parseRouteFromLocation());
-        if (latestRoute.view === 'profile') {
-          navigateToLanding();
-        }
-      } finally {
-        setBootstrapping(false);
-      }
-    })();
-  }, []);
+  // =============================================
+  // Payment callback handling
+  // =============================================
 
   useEffect(() => {
-    if (!user || !hasFetchedProfile) return;
-    void ensurePurchasedCoursesLoaded();
-  }, [user?.id, hasFetchedProfile, ensurePurchasedCoursesLoaded]);
-
-  useEffect(() => {
-    if (!user) return;
-    if (route.view !== 'profile') return;
-
     const params = new URLSearchParams(window.location.search);
     const payment = params.get('payment');
     const orderId = params.get('orderId');
-    if (!payment || !orderId) return;
-    if (payment !== 'success' && payment !== 'fail') return;
 
-    setPaymentResult({ open: true, status: 'pending' });
-
-    (async () => {
-      try {
-        const result = await syncTbankCoursePurchase(orderId);
-        const status = String(result?.status || '').toLowerCase();
-        const paid = Boolean(result?.paidAt) || status === 'confirmed' || status === 'paid';
-        setPaymentResult({ open: true, status: paid ? 'success' : 'fail' });
-        if (paid) {
-          const purchasedId = typeof result?.courseId === 'string' && result.courseId.trim() ? result.courseId.trim() : null;
-          if (purchasedId) {
-            setPurchasedCourseIds((prev) => {
-              const next = new Set(prev);
-              next.add(purchasedId);
-              return next;
-            });
-            setCourses((prev) => prev.map((course) => (course.id === purchasedId ? { ...course, isPurchased: true } : course)));
+    if (payment && orderId) {
+      (async () => {
+        try {
+          const result = await syncTbankCoursePurchase(orderId);
+          const isSuccess = (result.status === 'confirmed' || result.status === 'paid') && result.paidAt;
+          if (isSuccess && result.courseId) {
+            setPurchasedCourseIds(prev => new Set([...prev, result.courseId!]));
           }
-          await refreshPurchasedCourses();
+          setPaymentResult({ open: true, status: isSuccess ? 'success' : 'fail' });
+        } catch {
+          setPaymentResult({ open: true, status: 'fail' });
         }
-      } catch {
-        setPaymentResult({ open: true, status: payment === 'success' ? 'pending' : 'fail' });
-      } finally {
-        window.history.replaceState({}, '', '/profile');
-      }
-    })();
-  }, [route.view, user?.id, refreshPurchasedCourses]);
-
-  useEffect(() => {
-    if (!user || !hasFetchedProfile) return;
-    if (courses.length === 0) return;
-
-    const sortedIds = [...courses].map((course) => course.id).sort();
-    if (!sortedIds.length) return;
-    const key = `${user.id}:${sortedIds.join(',')}`;
-    if (progressFetchKeyRef.current === key) return;
-    progressFetchKeyRef.current = key;
-
-    let cancelled = false;
-    (async () => {
-      try {
-        setHasLoadedProgressList(false);
-        const progressMap = await fetchCoursesProgress(sortedIds);
-        if (cancelled) return;
-        setUser((prev) =>
-          prev
-            ? {
-              ...prev,
-              progress: { ...(prev.progress ?? {}), ...progressMap },
-            }
-            : prev,
-        );
-      } catch (error) {
-        console.error('Failed to load user progress', error);
-      } finally {
-        if (!cancelled) setHasLoadedProgressList(true);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-      // React StrictMode mounts/unmounts effects twice in dev; if we keep the key set after
-      // cleanup, the second mount will early-return and progress will never load.
-      if (progressFetchKeyRef.current === key) {
-        progressFetchKeyRef.current = null;
-      }
-    };
-  }, [courses, hasFetchedProfile, user?.id]);
-
-  useEffect(() => {
-    if (bootstrapping) return;
-
-    if (route.view === 'profile') {
-      if (user) {
-        setCurrentView('profile');
-        setSelectedCourseId(null);
-      } else if (hasFetchedProfile) {
-        navigateToLanding();
-      }
-      return;
+        // Clean URL
+        window.history.replaceState(null, '', window.location.pathname);
+      })();
     }
-
-    if (route.view === 'course') {
-      if (pendingCourseSlug && user) {
-        const course = resolveCourseBySlug(pendingCourseSlug);
-        if (course) {
-          void handleSelectCourse(course.id, { skipPathUpdate: true });
-        }
-      } else if (pendingCourseSlug && hasFetchedProfile && !user) {
-        navigateToLanding();
-      }
-      return;
-    }
-
-    if (route.view === 'vibe-coding') {
-      setCurrentView('vibe-coding');
-      setSelectedCourseId(null);
-      return;
-    }
-
-    if (route.view === 'prompt-driven-development') {
-      setCurrentView('prompt-driven-development');
-      setSelectedCourseId(null);
-      return;
-    }
-
-    if (route.view === 'ai-for-developers') {
-      setCurrentView('ai-for-developers');
-      setSelectedCourseId(null);
-      return;
-    }
-
-    setCurrentView('landing');
-    setSelectedCourseId(null);
-  }, [route, pendingCourseSlug, user, hasFetchedProfile, bootstrapping, courses, resolveCourseBySlug]);
-
-  useEffect(() => {
-    if (isAuthCallbackPath) return;
-    const targetPath = routeToPath(route);
-    if (window.location.pathname !== targetPath) {
-      window.history.replaceState({}, '', targetPath);
-    }
-  }, [route, isAuthCallbackPath]);
-
-  useEffect(() => {
-    if (isAuthCallbackPath) return;
-    const pathname = routeToPath(route);
-    const meta = getRouteSeo(pathname);
-    document.title = meta.title;
-    if (meta.description) ensureMetaTag('description').setAttribute('content', meta.description);
-    else removeMetaTag('description');
-
-    if (meta.canonicalUrl) {
-      ensureLinkTag('canonical').setAttribute('href', meta.canonicalUrl);
-    } else {
-      removeLinkTag('canonical');
-    }
-
-    ensureMetaProperty('og:title').setAttribute('content', meta.openGraph.title);
-    if (meta.openGraph.description) ensureMetaProperty('og:description').setAttribute('content', meta.openGraph.description);
-    else removeMetaProperty('og:description');
-    ensureMetaProperty('og:url').setAttribute('content', meta.openGraph.url);
-    ensureMetaProperty('og:site_name').setAttribute('content', meta.openGraph.siteName);
-    ensureMetaProperty('og:type').setAttribute('content', meta.openGraph.type);
-    ensureMetaProperty('og:locale').setAttribute('content', meta.openGraph.locale);
-    if (meta.openGraph.image) ensureMetaProperty('og:image').setAttribute('content', meta.openGraph.image);
-    else removeMetaProperty('og:image');
-
-    ensureMetaTag('twitter:card').setAttribute('content', meta.twitter.card);
-    ensureMetaTag('twitter:title').setAttribute('content', meta.twitter.title);
-    if (meta.twitter.description) ensureMetaTag('twitter:description').setAttribute('content', meta.twitter.description);
-    else removeMetaTag('twitter:description');
-    if (meta.twitter.image) ensureMetaTag('twitter:image').setAttribute('content', meta.twitter.image);
-    else removeMetaTag('twitter:image');
-
-    if (meta.noindex) {
-      ensureMetaTag('robots').setAttribute('content', 'noindex,nofollow');
-    } else {
-      removeMetaTag('robots');
-    }
-
-    addJsonLdScripts(meta.jsonLd);
-    document.dispatchEvent(new Event('prerender-ready'));
-  }, [route.view, route.courseSlug, route.landingPath, isAuthCallbackPath]);
-
-  const handleAuthenticated = (authedUser: User) => {
-    setUser(authedUser);
-    setHasFetchedProfile(true);
-    setAuthModalOpen(false);
-    navigateToProfile();
-  };
-
-  useEffect(() => {
-    if (!user) {
-      setConsentModalOpen(false);
-      return;
-    }
-    const needsConsent = !user.termsAccepted || !user.privacyAccepted;
-    setConsentModalOpen(needsConsent);
-  }, [user?.id, user?.termsAccepted, user?.privacyAccepted]);
-
-  const handleLogout = async () => {
-    try {
-      await logout();
-      if (supabase) {
-        await supabase.auth.signOut();
-      }
-      clearSupabaseStoredSession();
-    } catch {
-      // ignore
-    }
-    setUser(null);
-    setHasFetchedProfile(true);
-    navigateToLanding();
-  };
-
-  const applyUpdatedProfile = useCallback((profile: BackendProfile) => {
-    const updatedUser = userFromProfile(profile);
-    setUser((prev) =>
-      prev
-        ? {
-          ...prev,
-          ...updatedUser,
-          progress: prev.progress,
-          completedCourses: prev.completedCourses,
-        }
-        : updatedUser,
-    );
-    setConsentModalOpen(false);
   }, []);
 
-  const handleCourseProgressChange = useCallback(
-    (courseId: string, progress: CourseProgress) => {
-      setUser((prev) =>
-        prev
-          ? {
-            ...prev,
-            progress: { ...(prev.progress ?? {}), [courseId]: progress },
-          }
-          : prev,
-      );
-    },
-    [],
-  );
+  // =============================================
+  // SEO meta updates
+  // =============================================
 
-  const toUserFacingMessage = (error: unknown, fallback: string) => {
-    if (error instanceof ApiError) return error.message || fallback;
-    const message = error instanceof Error ? error.message : '';
-    if (/^Minified React error #\d+/i.test(message) || message.includes('react.dev/errors/')) {
-      return fallback;
+  useEffect(() => {
+    switch (activeTab) {
+      case 'dashboard':
+        updateMeta('VibecoderAi Academy — Курсы по AI-разработке', 'Учись создавать проекты с помощью ИИ. Курсы Vibe Coding, промпт-инженерия и AI для разработчиков.');
+        break;
+      case 'library':
+        updateMeta('Библиотека промптов — VibecoderAi', 'Готовые промпты для генерации кода, текста, анализа данных и творческих задач.');
+        break;
+      case 'profile':
+        updateMeta('Профиль — VibecoderAi', 'Ваш профиль и прогресс обучения.', true);
+        break;
+      case 'courses': {
+        const course = courses.find(c => c.slug === selectedCourseSlug);
+        if (course) {
+          updateMeta(`${course.title} — VibecoderAi`, course.description ?? 'Курс на VibecoderAi Academy');
+        }
+        break;
+      }
     }
-    return message || fallback;
-  };
+  }, [activeTab, selectedCourseSlug, courses]);
 
-  const handleSelectCourse = async (
-    courseId: string,
-    options?: { skipPathUpdate?: boolean },
-  ) => {
-    if (!user) {
-      navigateToLanding();
-      handleOpenAuth('register');
-      return;
-    }
+  // =============================================
+  // Mouse spotlight effect
+  // =============================================
 
-    const course = courses.find((c) => c.id === courseId);
+  useEffect(() => {
+    const handleMouseMove = (event: MouseEvent) => {
+      if (containerRef.current) {
+        const rect = containerRef.current.getBoundingClientRect();
+        setMousePos({ x: event.clientX - rect.left, y: event.clientY - rect.top });
+      }
+    };
+    window.addEventListener('mousemove', handleMouseMove);
+    return () => window.removeEventListener('mousemove', handleMouseMove);
+  }, []);
+
+  // =============================================
+  // Handlers
+  // =============================================
+
+  const handleNavigate = useCallback((view: AppView, courseSlug?: string) => {
+    setActiveTab(view);
+    setSelectedCourseSlug(courseSlug ?? null);
+    setIsProfileMenuOpen(false);
+    navigateTo(viewToPath(view, courseSlug));
+  }, []);
+
+  const handleSelectCourse = useCallback((courseId: string) => {
+    setViewingCourseId(courseId);
+  }, []);
+
+  const handleStartCourse = useCallback(async (courseId: string) => {
+    const course = courses.find(c => c.id === courseId);
     if (!course) return;
 
-    const accessLower = (course.access ?? '').toLowerCase();
-    const price = typeof course.price === 'number' ? course.price : 0;
-    const requiresPurchase = accessLower === 'paid' || accessLower === 'purchase' || accessLower === 'buy' || price > 0;
-    if (requiresPurchase) {
-      const purchased =
-        Boolean(course.isPurchased) ||
-        purchasedCourseIds.has(course.id) ||
-        (await ensurePurchasedCoursesLoaded()).has(course.id);
-      if (!purchased) {
-        setPurchaseCourse(course);
-        setPurchaseModalOpen(true);
-        return;
-      }
-    }
-
-    if (!course.isFree && !user.isSubscribed) {
-      alert('Этот курс доступен только по подписке! Пожалуйста, оформите Vibe Pro.');
+    // Check if paid course needs purchase
+    if (course.access === 'paid' && course.price && course.price > 0 && !purchasedCourseIds.has(courseId) && !course.isFree) {
+      setPurchasingCourse(course);
+      setViewingCourseId(null);
       return;
     }
 
-    if (course.lessons.length === 0) {
-      setLessonsLoadingFor(courseId);
+    // Load course content if needed
+    if (!course.lessons || course.lessons.length === 0) {
       try {
-        const { lessons, modules } = await fetchCourseContent(courseId);
-        setCourses((prev) =>
-          prev.map((c) => (c.id === courseId ? { ...c, lessons, modules } : c)),
-        );
-      } catch (error) {
-        alert(toUserFacingMessage(error, 'Не удалось загрузить уроки. Попробуйте ещё раз.'));
-        setLessonsLoadingFor(null);
+        const content = await fetchCourseContent(courseId);
+        setCourses(prev => prev.map(c =>
+          c.id === courseId ? { ...c, lessons: content.lessons, modules: content.modules } : c
+        ));
+      } catch (e) {
+        console.error('Failed to load course content', e);
         return;
       }
-      setLessonsLoadingFor(null);
     }
 
-    setSelectedCourseId(courseId);
-    setCurrentView('course');
-    const slug = course.slug ?? courseId;
-    setPendingCourseSlug(slug);
-    if (!options?.skipPathUpdate) {
-      syncRoute({ view: 'course', courseSlug: slug });
-    }
-  };
+    setViewingCourseId(null);
+    handleNavigate('courses', course.slug);
+  }, [courses, purchasedCourseIds, handleNavigate]);
 
-  const handleSubscribe = () => {
-    if (!user) {
-      handleOpenAuth('register');
-      return;
-    }
-    const confirm = window.confirm("Оформить подписку за 1499₽ в месяц?");
-    if (confirm) {
-      setUser({ ...user, isSubscribed: true });
-      alert("Поздравляем! Вы теперь Vibe Pro кодер. Доступ ко всем курсам открыт.");
-    }
-  };
+  const handleBackToDashboard = useCallback(() => {
+    handleNavigate('dashboard');
+  }, [handleNavigate]);
 
-  const activeCourse = courses.find(c => c.id === selectedCourseId);
-  const isLessonsLoading = lessonsLoadingFor === selectedCourseId;
+  const handleLogout = useCallback(async () => {
+    try {
+      await apiLogout();
+      if (supabase) await supabase.auth.signOut();
+      clearSupabaseStoredSession();
+    } catch { /* ignore */ }
+    setUser(null);
+    setIsProfileMenuOpen(false);
+    handleNavigate('dashboard');
+  }, [handleNavigate]);
 
-  if (isAuthCallbackPath) {
+  const handleAuthSuccess = useCallback(async () => {
+    try {
+      const profile = await me();
+      const u = userFromProfile(profile);
+      setUser(u);
+      setIsAuthModalOpen(false);
+      if (!u.termsAccepted || !u.privacyAccepted) {
+        setConsentModalOpen(true);
+      }
+    } catch { /* ignore */ }
+  }, []);
+
+  const handleProgressChange = useCallback((courseId: string, progress: CourseProgress) => {
+    setCourseProgress(prev => ({ ...prev, [courseId]: progress }));
+  }, []);
+
+  // =============================================
+  // Derived state
+  // =============================================
+
+  const selectedCourse = selectedCourseSlug ? courses.find(c => c.slug === selectedCourseSlug) : null;
+  const viewingCourse = viewingCourseId ? courses.find(c => c.id === viewingCourseId) : null;
+  const isLessonMode = activeTab === 'courses' && !!selectedCourse;
+
+  // Calculate stats for Dashboard
+  const totalLessons = user ? courses.reduce((acc, course) => {
+    const hasAccess = course.isFree || purchasedCourseIds.has(course.id);
+    return hasAccess ? acc + (course.lessons?.length ?? 0) : acc;
+  }, 0) : 0;
+
+  const completedLessonIds = Object.entries(courseProgress).flatMap(([, cp]) =>
+    Object.entries(cp?.lessons ?? {})
+      .filter(([, lp]) => lp?.status === 'completed')
+      .map(([lessonId]) => lessonId)
+  );
+
+  // =============================================
+  // Auth Callback route
+  // =============================================
+
+  if (activeTab === 'auth-callback') {
     return (
       <AuthCallback
-        onAuthenticated={(authedUser) => {
-          setUser(authedUser);
-          setHasFetchedProfile(true);
-          setBootstrapping(false);
-          navigateToProfile();
-        }}
+        onAuthenticated={(u) => { setUser(u); handleNavigate('profile'); }}
       />
     );
   }
 
-  if (bootstrapping && (currentView === 'profile' || currentView === 'course')) {
+  // =============================================
+  // Loading screen
+  // =============================================
+
+  if (bootstrapping) {
     return (
-      <div className="min-h-screen bg-void text-white flex items-center justify-center">
-        <OrbitLoader label="Вайбкодим загрузку" />
+      <div className="min-h-screen bg-vibe-dark flex items-center justify-center">
+        <Loader2 className="w-8 h-8 text-vibe-primary animate-spin" />
       </div>
     );
   }
 
-  return (
-    <div className="font-sans antialiased text-slate-900">
-      <AuthModal
-        isOpen={authModalOpen}
-        onClose={() => setAuthModalOpen(false)}
-        onAuthenticated={handleAuthenticated}
-        initialMode={authMode}
+  // =============================================
+  // Render Content
+  // =============================================
+
+  const renderContent = () => {
+    if (activeTab === 'profile' && user) {
+      return (
+        <Profile
+          user={user}
+          courses={courses}
+          courseProgress={courseProgress}
+          purchasedCourseIds={purchasedCourseIds}
+          onSelectCourse={handleSelectCourse}
+          onOpenAuth={() => setIsAuthModalOpen(true)}
+        />
+      );
+    }
+
+    if (activeTab === 'library') {
+      return <PromptLibrary prompts={promptLibrary} />;
+    }
+
+    if (activeTab === 'courses' && selectedCourse) {
+      return (
+        <CourseViewer
+          course={selectedCourse}
+          user={user}
+          courseProgress={courseProgress[selectedCourse.id] ?? {}}
+          purchasedCourseIds={purchasedCourseIds}
+          onBack={handleBackToDashboard}
+          onProgressChange={handleProgressChange}
+          onOpenAuth={() => setIsAuthModalOpen(true)}
+        />
+      );
+    }
+
+    return (
+      <Dashboard
+        courses={courses}
+        courseProgress={courseProgress}
+        completedLessonIds={completedLessonIds}
+        totalLessons={totalLessons}
+        user={user}
+        purchasedCourseIds={purchasedCourseIds}
+        onSelectCourse={handleSelectCourse}
+        onOpenLibrary={() => handleNavigate('library')}
+        loading={coursesLoading}
       />
+    );
+  };
+
+  // =============================================
+  // JSX
+  // =============================================
+
+  return (
+    <div
+      ref={containerRef}
+      className="min-h-screen bg-vibe-dark text-vibe-text font-sans selection:bg-vibe-primary selection:text-white relative overflow-x-hidden"
+    >
+      {/* Modals */}
+      <AuthModal
+        isOpen={isAuthModalOpen}
+        onClose={() => setIsAuthModalOpen(false)}
+        onAuthSuccess={handleAuthSuccess}
+      />
+
+      <ConsentModal
+        isOpen={consentModalOpen}
+        termsAccepted={user?.termsAccepted ?? false}
+        privacyAccepted={user?.privacyAccepted ?? false}
+        onAccepted={(profile) => {
+          setUser(userFromProfile(profile));
+          setConsentModalOpen(false);
+        }}
+        onLogout={handleLogout}
+      />
+
+      {viewingCourse && (
+        <CourseModal
+          course={viewingCourse}
+          isOpen={!!viewingCourse}
+          isEnrolled={viewingCourse.isFree || purchasedCourseIds.has(viewingCourse.id)}
+          onClose={() => setViewingCourseId(null)}
+          onStartCourse={() => handleStartCourse(viewingCourse.id)}
+          onPurchaseCourse={() => {
+            setPurchasingCourse(viewingCourse);
+            setViewingCourseId(null);
+          }}
+          user={user}
+          onOpenAuth={() => setIsAuthModalOpen(true)}
+        />
+      )}
+
+      {purchasingCourse && (
+        <PurchaseCourseModal
+          isOpen={!!purchasingCourse}
+          course={purchasingCourse}
+          onClose={() => setPurchasingCourse(null)}
+        />
+      )}
+
       <PaymentResultModal
         isOpen={paymentResult.open}
         status={paymentResult.status}
-        onClose={async () => {
-          if (paymentResult.status === 'success') {
-            await refreshPurchasedCourses();
-          }
-          setPaymentResult((prev) => ({ ...prev, open: false }));
+        onClose={() => setPaymentResult({ open: false, status: 'pending' })}
+      />
+
+      {/* --- Global Background Effects --- */}
+      <div
+        className="fixed inset-0 z-0 pointer-events-none opacity-[0.15]"
+        style={{
+          backgroundImage: `
+            linear-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(255, 255, 255, 0.05) 1px, transparent 1px)
+          `,
+          backgroundSize: '30px 30px'
         }}
       />
-      <PurchaseCourseModal
-        isOpen={purchaseModalOpen}
-        course={purchaseCourse}
-        onClose={() => {
-          setPurchaseModalOpen(false);
-          setPurchaseCourse(null);
-          setLessonsLoadingFor(null);
-          navigateToProfile();
+      <div
+        className="fixed inset-0 z-0 pointer-events-none transition-opacity duration-300"
+        style={{
+          background: `radial-gradient(600px circle at ${mousePos.x}px ${mousePos.y}px, rgba(99, 102, 241, 0.15), transparent 40%)`
         }}
       />
-      {user ? (
-        <ConsentModal
-          isOpen={consentModalOpen}
-          termsAccepted={Boolean(user.termsAccepted)}
-          privacyAccepted={Boolean(user.privacyAccepted)}
-          onAccepted={applyUpdatedProfile}
-          onLogout={() => {
-            void handleLogout();
-          }}
-        />
-      ) : null}
+      <div className="fixed top-0 left-1/2 -translate-x-1/2 w-[800px] h-[400px] bg-vibe-primary/20 blur-[100px] rounded-full opacity-20 pointer-events-none z-0" />
 
-      {currentView === 'landing' && (
-        <LandingPage
-          courses={courses}
-          user={user}
-          onSelectCourse={handleSelectCourse}
-          onSubscribe={handleSubscribe}
-          onOpenAuth={handleOpenAuth}
-          onGoToProfile={navigateToProfile}
-        />
-      )}
+      {/* --- Content --- */}
+      <div className="relative z-10 flex flex-col min-h-screen">
+        {/* Navigation Header */}
+        <header className="fixed top-0 left-0 right-0 z-50 bg-vibe-dark/80 backdrop-blur-lg border-b border-gray-800">
+          <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
+            <div
+              className="flex items-center gap-2 font-bold text-xl cursor-pointer"
+              onClick={() => handleNavigate('dashboard')}
+            >
+              <span>Vibecoder</span>
+              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-vibe-primary to-vibe-accent flex items-center justify-center text-white shadow-lg shadow-indigo-500/20">
+                Ai
+              </div>
+            </div>
 
-      {currentView === 'vibe-coding' && (
-        <VibeCodingPage />
-      )}
-
-      {currentView === 'prompt-driven-development' && (
-        <PromptDrivenDevelopmentPage />
-      )}
-
-      {currentView === 'ai-for-developers' && (
-        <AiForDevelopersPage />
-      )}
-
-      {currentView === 'profile' && user && (
-        <ProfilePage
-          user={user}
-          courses={courses}
-          progressLoaded={hasLoadedProgressList}
-          purchasedCourseIds={purchasedCourseIds}
-          onLogout={handleLogout}
-          onContinueCourse={(id) => {
-            void handleSelectCourse(id);
-          }}
-          onPurchaseCourse={(course) => {
-            setPurchaseCourse(course);
-            setPurchaseModalOpen(true);
-          }}
-          onSubscribe={handleSubscribe}
-        />
-      )}
-
-      {currentView === 'course' && user && (
-        isLessonsLoading ? (
-          <div className="min-h-screen bg-void text-white flex items-center justify-center">
-            <OrbitLoader label="Загружаем уроки" />
-          </div>
-        ) : activeCourse && activeCourse.lessons.length > 0 ? (
-          <CourseViewer
-            course={activeCourse}
-            onBack={navigateToProfile}
-            isSubscribed={user.isSubscribed}
-            initialProgress={user.progress?.[activeCourse.id]}
-            onProgressChange={handleCourseProgressChange}
-          />
-        ) : (
-          <div className="min-h-screen bg-void text-white flex items-center justify-center text-center px-6">
-            <div>
-              <div className="text-slate-200 font-semibold mb-2">Не удалось загрузить уроки курса</div>
+            <nav className="flex gap-1 bg-gray-900/50 p-1 rounded-full border border-gray-800 overflow-x-auto no-scrollbar">
               <button
-                onClick={navigateToProfile}
-                className="mt-3 px-4 py-2 rounded-lg border border-white/10 text-slate-300 hover:bg-white/5 transition-colors text-sm"
+                onClick={() => handleNavigate('dashboard')}
+                className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-all duration-300 whitespace-nowrap ${
+                  activeTab === 'dashboard' ? 'bg-vibe-card text-white shadow-sm ring-1 ring-white/10 scale-[1.02]' : 'text-gray-400 hover:text-white hover:bg-white/5'
+                }`}
               >
-                Вернуться в профиль
+                <LayoutDashboard size={16} />
+                <span className="hidden sm:inline">Главная</span>
               </button>
+              <button
+                onClick={() => handleNavigate('library')}
+                className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-all duration-300 whitespace-nowrap ${
+                  activeTab === 'library' ? 'bg-vibe-card text-white shadow-sm ring-1 ring-white/10 scale-[1.02]' : 'text-gray-400 hover:text-white hover:bg-white/5'
+                }`}
+              >
+                <Library size={16} />
+                <span className="hidden sm:inline">Промпты</span>
+              </button>
+            </nav>
+
+            <div className="flex items-center gap-3">
+              {user ? (
+                <div className="relative">
+                  <button
+                    onClick={() => setIsProfileMenuOpen(!isProfileMenuOpen)}
+                    className="flex items-center gap-3 p-1 pr-3 rounded-full hover:bg-gray-800 transition-colors border border-transparent hover:border-gray-700"
+                  >
+                    {user.avatarUrl ? (
+                      <img src={user.avatarUrl} alt="Avatar" className="w-8 h-8 rounded-full border border-gray-600" />
+                    ) : (
+                      <div className="w-8 h-8 rounded-full bg-vibe-primary flex items-center justify-center text-white font-bold text-sm">
+                        {user.name?.[0]?.toUpperCase() ?? 'U'}
+                      </div>
+                    )}
+                    <div className="text-right hidden sm:block">
+                      <p className="text-xs text-gray-400">{user.isSubscribed ? 'PRO Студент' : 'Студент'}</p>
+                      <p className="text-sm font-semibold text-white max-w-[100px] truncate">
+                        {user.name}
+                      </p>
+                    </div>
+                  </button>
+
+                  {isProfileMenuOpen && (
+                    <div className="absolute top-full right-0 mt-2 w-48 bg-vibe-card border border-gray-700 rounded-xl shadow-xl overflow-hidden py-1 animate-fade-in">
+                      <div className="px-4 py-3 border-b border-gray-700 sm:hidden">
+                        <p className="text-sm text-white font-medium truncate">{user.name || user.email}</p>
+                      </div>
+                      <button
+                        onClick={() => handleNavigate('profile')}
+                        className="w-full text-left px-4 py-2.5 text-sm text-gray-300 hover:bg-gray-800 hover:text-white flex items-center gap-2 transition-colors"
+                      >
+                        <UserIcon size={16} />
+                        Профиль
+                      </button>
+                      <button
+                        onClick={handleLogout}
+                        className="w-full text-left px-4 py-2.5 text-sm text-red-400 hover:bg-gray-800 hover:text-red-300 flex items-center gap-2 transition-colors"
+                      >
+                        <LogOut size={16} />
+                        Выйти
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <button
+                  onClick={() => setIsAuthModalOpen(true)}
+                  className="flex items-center gap-2 px-4 py-2 rounded-xl bg-gray-800 hover:bg-gray-700 text-white text-sm font-medium transition-colors border border-gray-700"
+                >
+                  <LogIn size={16} />
+                  <span>Войти</span>
+                </button>
+              )}
             </div>
           </div>
-        )
-      )}
+        </header>
+
+        {/* Main Content */}
+        <main className="pt-16 flex-grow">
+          <div
+            key={activeTab + (selectedCourseSlug ?? '')}
+            className="animate-page-in"
+          >
+            {renderContent()}
+          </div>
+        </main>
+
+        {/* Footer */}
+        {!isLessonMode && (
+          <footer className="border-t border-gray-800 bg-vibe-dark/50 backdrop-blur-sm py-8 mt-auto relative z-10">
+            <div className="max-w-7xl mx-auto px-6 text-center text-gray-500 text-sm">
+              <p>&copy; 2025-2026 VibecoderAi Academy. Учись, создавай, ускоряй.</p>
+            </div>
+          </footer>
+        )}
+      </div>
     </div>
   );
 };

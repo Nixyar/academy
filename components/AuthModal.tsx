@@ -1,330 +1,242 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react';
-import { X, Mail, Lock, User as UserIcon, ArrowRight, Loader2, Chrome } from 'lucide-react';
+import React, { useState } from 'react';
+import { X, Mail, Lock, AlertCircle, Loader2 } from 'lucide-react';
+import { loginWithEmail, registerWithEmail } from '../services/authApi';
 import { supabase } from '../services/supabaseClient';
-import { acceptDocuments, me, loginWithEmail, registerWithEmail } from '../services/authApi';
-import { userFromProfile } from '../services/userFromProfile';
-import { ApiError } from '../services/apiClient';
-import type { User } from '../types';
-import { useBodyScrollLock } from './useBodyScrollLock';
 
 interface AuthModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onAuthenticated: (user: User) => void;
-  initialMode?: 'login' | 'register';
+  onAuthSuccess: () => void;
 }
 
-export const AuthModal: React.FC<AuthModalProps> = ({
-  isOpen,
-  onClose,
-  onAuthenticated,
-  initialMode = 'login',
-}) => {
-  const [mode, setMode] = useState<'login' | 'register'>(initialMode);
+const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuccess }) => {
+  const [isLogin, setIsLogin] = useState(true);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
-  const [registerConsent, setRegisterConsent] = useState(false);
-  const formRef = useRef<HTMLFormElement | null>(null);
-  const [isFormValid, setIsFormValid] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [oauthInProgress, setOauthInProgress] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [info, setInfo] = useState<string | null>(null);
-  useBodyScrollLock(isOpen);
-
-  const resetForm = useCallback(() => {
-    setEmail('');
-    setPassword('');
-    setName('');
-    setRegisterConsent(false);
-    setError(null);
-    setInfo(null);
-    setLoading(false);
-    setOauthInProgress(false);
-    setMode(initialMode);
-  }, [initialMode]);
-
-  const handleClose = () => {
-    resetForm();
-    onClose();
-  };
-
-  useEffect(() => {
-    resetForm();
-  }, [isOpen, resetForm]);
-
-  useEffect(() => {
-    const handleFocus = () => {
-      if (!oauthInProgress) return;
-      setLoading(false);
-      setOauthInProgress(false);
-    };
-
-    window.addEventListener('focus', handleFocus);
-    return () => window.removeEventListener('focus', handleFocus);
-  }, [oauthInProgress]);
-
-  useEffect(() => {
-    setIsFormValid(Boolean(formRef.current?.checkValidity()));
-  }, [mode, name, email, password]);
+  const [loading, setLoading] = useState(false);
 
   if (!isOpen) return null;
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!formRef.current?.checkValidity()) {
-      setIsFormValid(false);
-      return;
-    }
-    if (mode === 'register' && !registerConsent) {
-      setError('Для регистрации нужно принять Пользовательское соглашение и Политику конфиденциальности.');
+  const handleGoogleLogin = async () => {
+    if (!supabase) {
+      setError('Supabase не настроен. Проверьте переменные окружения.');
       return;
     }
     setLoading(true);
-    setOauthInProgress(false);
     setError(null);
-    setInfo(null);
+    try {
+      const { error: oauthError } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: `${window.location.origin}/auth/callback`,
+        },
+      });
+      if (oauthError) throw oauthError;
+      // Supabase redirects to Google — browser will navigate away
+    } catch (err: any) {
+      setError(err.message || 'Ошибка входа через Google');
+      setLoading(false);
+    }
+  };
+
+  const handleEmailAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError(null);
 
     try {
-      if (mode === 'login') {
+      if (isLogin) {
         await loginWithEmail(email, password);
       } else {
-        await registerWithEmail(name, email, password);
-      }
-
-      let profile: Awaited<ReturnType<typeof me>>;
-      try {
-        profile = await me();
-      } catch (err) {
-        if (mode === 'register' && err instanceof ApiError && err.status === 401) {
-          setInfo('Проверьте почту: возможно нужно подтвердить email перед входом.');
+        if (!name.trim()) {
+          setError('Введите ваше имя.');
+          setLoading(false);
           return;
         }
-        throw err;
+        await registerWithEmail(name.trim(), email, password);
       }
-
-      if (mode === 'register' && registerConsent) {
-        try {
-          profile = await acceptDocuments({ termsAccepted: true, privacyAccepted: true });
-        } catch (err) {
-          // Non-blocking: user will be prompted to confirm documents on next screen
-          console.warn('Failed to persist registration consent', err);
-        }
+      onAuthSuccess();
+    } catch (err: any) {
+      const msg = err?.message || '';
+      if (msg.includes('Invalid login') || msg.includes('invalid-credential') || msg.includes('401') || msg.includes('Unauthorized')) {
+        setError('Неверный email или пароль.');
+      } else if (msg.includes('already') || msg.includes('duplicate') || msg.includes('exists')) {
+        setError('Этот email уже занят.');
+      } else if (msg.includes('weak') || msg.includes('password') || msg.includes('6 char')) {
+        setError('Пароль слишком простой (минимум 6 символов).');
+      } else {
+        setError(msg || 'Произошла ошибка. Попробуйте позже.');
       }
-      onAuthenticated(userFromProfile(profile));
-      handleClose();
-    } catch (e: any) {
-      const message =
-        e?.message || 'Ошибка авторизации.';
-      setError(message);
     } finally {
       setLoading(false);
     }
   };
 
-  const handleGoogleLogin = async () => {
-    setLoading(true);
-    setOauthInProgress(true);
-    setError(null);
-    setInfo(null);
-
-    try {
-      if (!supabase) {
-        throw new Error('SUPABASE_ENV_MISSING');
-      }
-
-      const redirectTo = `${window.location.origin}/auth/callback`;
-      const { error: oauthError } = await supabase.auth.signInWithOAuth({
-        provider: 'google',
-        options: { redirectTo },
-      });
-      if (oauthError) throw oauthError;
-    } catch (e: any) {
-      const message =
-        e?.message === 'SUPABASE_ENV_MISSING'
-          ? 'Не настроены переменные окружения Supabase (VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY).'
-          : e?.message || 'Ошибка входа через Google.';
-      setError(message);
-      setOauthInProgress(false);
-      setLoading(false);
-    }
-  };
-
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
       {/* Backdrop */}
-      <div 
-        className="absolute inset-0 bg-[#030712]/90 backdrop-blur-md"
-      ></div>
+      <div
+        className="absolute inset-0 bg-black/60 backdrop-blur-sm transition-opacity"
+        onClick={onClose}
+      />
 
-      {/* Modal Card */}
-      <div className="relative w-full max-w-md bg-[#0a0f1e] border border-white/10 rounded-3xl shadow-2xl shadow-purple-900/20 overflow-hidden animate-blob-enter">
-        {/* Decor */}
-        <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-vibe-500 via-purple-500 to-pink-500"></div>
-        <div className="absolute -top-20 -right-20 w-40 h-40 bg-purple-500/10 rounded-full blur-3xl pointer-events-none"></div>
+      {/* Modal Content */}
+      <div className="relative w-full max-w-md bg-vibe-dark border border-gray-800 rounded-2xl shadow-2xl shadow-indigo-500/10 overflow-hidden animate-fade-in">
+        {/* Glow Effect */}
+        <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-vibe-primary via-vibe-accent to-pink-500" />
 
-        <button 
-          onClick={handleClose}
-          className="absolute top-5 right-5 text-slate-400 hover:text-white transition-colors"
+        <button
+          onClick={onClose}
+          className="absolute top-4 right-4 text-gray-500 hover:text-white transition-colors"
         >
-          <X className="w-5 h-5" />
+          <X size={20} />
         </button>
 
-        <div className="p-8 pt-10">
-          <h2 className="text-3xl font-bold font-display text-white mb-2 text-center">
-            {mode === 'login' ? 'Welcome Back' : 'Start Coding'}
-          </h2>
-          <p className="text-slate-400 text-center mb-8 text-sm">
-            {mode === 'login' 
-              ? 'Войдите, чтобы продолжить обучение' 
-              : 'Создайте аккаунт и начните путь Vibe Coder'}
-          </p>
+        <div className="p-8">
+          <div className="text-center mb-8">
+            <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-vibe-card border border-gray-700 mb-4 text-white">
+              <span className="font-bold text-xl">Ai</span>
+            </div>
+            <h2 className="text-2xl font-bold text-white mb-2">
+              {isLogin ? 'С возвращением!' : 'Создать аккаунт'}
+            </h2>
+            <p className="text-gray-400 text-sm">
+              {isLogin
+                ? 'Войдите, чтобы сохранить свой прогресс'
+                : 'Присоединяйтесь к Vibecoder Academy бесплатно'}
+            </p>
+          </div>
 
-          <button 
-            type="button"
+          {/* Social Auth */}
+          <button
             onClick={handleGoogleLogin}
-            className="w-full bg-white text-void font-bold py-3.5 rounded-xl hover:bg-slate-200 transition-colors flex items-center justify-center gap-3 mb-6"
+            disabled={loading}
+            className="w-full bg-white text-gray-900 font-medium py-2.5 px-4 rounded-xl flex items-center justify-center gap-3 hover:bg-gray-100 transition-colors mb-6"
           >
-            <Chrome className="w-5 h-5" />
-            Продолжить с Google
+            {loading ? (
+               <Loader2 size={20} className="animate-spin" />
+            ) : (
+              <>
+                <svg className="w-5 h-5" viewBox="0 0 24 24">
+                  <path
+                    d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+                    fill="#4285F4"
+                  />
+                  <path
+                    d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+                    fill="#34A853"
+                  />
+                  <path
+                    d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"
+                    fill="#FBBC05"
+                  />
+                  <path
+                    d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
+                    fill="#EA4335"
+                  />
+                </svg>
+                Продолжить с Google
+              </>
+            )}
           </button>
 
           <div className="relative mb-6">
             <div className="absolute inset-0 flex items-center">
-              <div className="w-full border-t border-white/10"></div>
+              <div className="w-full border-t border-gray-800"></div>
             </div>
-            <div className="relative flex justify-center text-xs uppercase">
-              <span className="bg-[#0a0f1e] px-2 text-slate-500">Или через Email</span>
+            <div className="relative flex justify-center text-sm">
+              <span className="px-2 bg-vibe-dark text-gray-500">или</span>
             </div>
           </div>
 
-          <form ref={formRef} onSubmit={handleSubmit} className="space-y-4" autoComplete="on">
-            {mode === 'register' && (
-              <div className="space-y-1">
-                <label className="text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">Имя</label>
-                <div className="relative group">
-                  <UserIcon className="absolute left-4 top-3.5 w-5 h-5 text-slate-500 group-focus-within:text-vibe-400 transition-colors" />
-                  <input 
-                    type="text" 
+          {/* Email Auth Form */}
+          <form onSubmit={handleEmailAuth} className="space-y-4">
+            {error && (
+              <div className="p-3 rounded-lg bg-red-900/20 border border-red-900/50 text-red-400 text-sm flex items-start gap-2">
+                <AlertCircle size={16} className="shrink-0 mt-0.5" />
+                <span>{error}</span>
+              </div>
+            )}
+
+            {!isLogin && (
+               <div className="space-y-1">
+                <label className="text-xs text-gray-400 ml-1">Имя</label>
+                <div className="relative">
+                  <input
+                    type="text"
                     required
                     value={name}
                     onChange={(e) => setName(e.target.value)}
-                    name="name"
-                    autoComplete="name"
-                    className="w-full bg-[#02050e] border border-white/10 rounded-xl py-3 pl-12 pr-4 text-white focus:outline-none focus:border-vibe-500 focus:ring-1 focus:ring-vibe-500 transition-all placeholder:text-slate-700 font-medium"
-                    placeholder="Neo"
+                    className="w-full bg-vibe-card/50 border border-gray-700 rounded-xl py-2.5 px-4 pl-10 text-white focus:outline-none focus:border-vibe-primary focus:ring-1 focus:ring-vibe-primary transition-all"
+                    placeholder="Ваше имя"
                   />
+                  <div className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">
+                    <span className="text-xs font-bold">Aa</span>
+                  </div>
                 </div>
               </div>
             )}
 
             <div className="space-y-1">
-              <label className="text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">Email</label>
-              <div className="relative group">
-                <Mail className="absolute left-4 top-3.5 w-5 h-5 text-slate-500 group-focus-within:text-vibe-400 transition-colors" />
-                <input 
-                  type="email" 
+              <label className="text-xs text-gray-400 ml-1">Email</label>
+              <div className="relative">
+                <input
+                  type="email"
                   required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  name="email"
-                  autoComplete="email"
-                  className="w-full bg-[#02050e] border border-white/10 rounded-xl py-3 pl-12 pr-4 text-white focus:outline-none focus:border-vibe-500 focus:ring-1 focus:ring-vibe-500 transition-all placeholder:text-slate-700 font-medium"
-                  placeholder="neo@matrix.com"
+                  className="w-full bg-vibe-card/50 border border-gray-700 rounded-xl py-2.5 px-4 pl-10 text-white focus:outline-none focus:border-vibe-primary focus:ring-1 focus:ring-vibe-primary transition-all"
+                  placeholder="name@example.com"
                 />
+                <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={18} />
               </div>
             </div>
 
             <div className="space-y-1">
-              <label className="text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">Пароль</label>
-              <div className="relative group">
-                <Lock className="absolute left-4 top-3.5 w-5 h-5 text-slate-500 group-focus-within:text-vibe-400 transition-colors" />
-                <input 
-                  type="password" 
+              <label className="text-xs text-gray-400 ml-1">Пароль</label>
+              <div className="relative">
+                <input
+                  type="password"
                   required
+                  minLength={6}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  name={mode === 'login' ? 'current-password' : 'new-password'}
-                  autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
-                  className="w-full bg-[#02050e] border border-white/10 rounded-xl py-3 pl-12 pr-4 text-white focus:outline-none focus:border-vibe-500 focus:ring-1 focus:ring-vibe-500 transition-all placeholder:text-slate-700 font-medium"
+                  className="w-full bg-vibe-card/50 border border-gray-700 rounded-xl py-2.5 px-4 pl-10 text-white focus:outline-none focus:border-vibe-primary focus:ring-1 focus:ring-vibe-primary transition-all"
                   placeholder="••••••••"
                 />
+                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={18} />
               </div>
             </div>
 
-            {mode === 'register' && (
-              <label className="flex items-start gap-3 rounded-xl border border-white/10 bg-[#02050e] px-4 py-3">
-                <input
-                  type="checkbox"
-                  checked={registerConsent}
-                  onChange={(e) => setRegisterConsent(e.target.checked)}
-                  className="mt-1 h-4 w-4 rounded border-white/20 bg-transparent text-vibe-500 focus:ring-vibe-500"
-                />
-                <span className="text-sm text-slate-300 leading-snug">
-                  Я принимаю{' '}
-                  <a
-                    href="/agreement.pdf"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-vibe-400 hover:text-vibe-300 transition-colors underline underline-offset-4"
-                  >
-                    Пользовательское соглашение
-                  </a>{' '}
-                  и{' '}
-                  <a
-                    href="/privacy.docx"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-vibe-400 hover:text-vibe-300 transition-colors underline underline-offset-4"
-                  >
-                    Политику конфиденциальности
-                  </a>
-                </span>
-              </label>
-            )}
-
-            <button 
+            <button
               type="submit"
-              disabled={loading || !isFormValid || (mode === 'register' && !registerConsent)}
-              className="w-full mt-2 bg-gradient-to-r from-vibe-600 to-purple-600 hover:from-vibe-500 hover:to-purple-500 text-white font-bold py-3.5 rounded-xl shadow-[0_0_20px_rgba(124,58,237,0.3)] hover:shadow-[0_0_30px_rgba(124,58,237,0.5)] transition-all flex items-center justify-center gap-2 group disabled:opacity-70 disabled:cursor-not-allowed"
+              disabled={loading}
+              className="w-full bg-gradient-to-r from-vibe-primary to-vibe-accent text-white font-bold py-3 rounded-xl hover:shadow-lg hover:shadow-indigo-500/20 transition-all transform active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center"
             >
-              {loading ? (
-                <Loader2 className="w-5 h-5 animate-spin" />
-              ) : (
-                <>
-                  {mode === 'login' ? 'Войти в систему' : 'Создать аккаунт'}
-                  <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
-                </>
-              )}
+              {loading ? <Loader2 size={20} className="animate-spin" /> : (isLogin ? 'Войти' : 'Зарегистрироваться')}
             </button>
           </form>
 
-          {(error || info) && (
-            <div
-              className={`mt-5 rounded-2xl p-4 text-sm border ${
-                error
-                  ? 'bg-red-500/10 border-red-500/20 text-red-200'
-                  : 'bg-white/5 border-white/10 text-slate-300'
-              }`}
-            >
-              {error ?? info}
-            </div>
-          )}
-
           <div className="mt-6 text-center">
-            <p className="text-slate-400 text-sm">
-              {mode === 'login' ? 'Нет аккаунта?' : 'Уже есть аккаунт?'}
-              <button 
-                onClick={() => setMode(mode === 'login' ? 'register' : 'login')}
-                className="ml-2 text-vibe-400 font-bold hover:text-vibe-300 transition-colors underline underline-offset-4"
-              >
-                {mode === 'login' ? 'Регистрация' : 'Войти'}
-              </button>
-            </p>
+            <button
+              onClick={() => {
+                setIsLogin(!isLogin);
+                setError(null);
+              }}
+              className="text-sm text-gray-400 hover:text-white transition-colors"
+            >
+              {isLogin ? 'Нет аккаунта? ' : 'Уже есть аккаунт? '}
+              <span className="text-vibe-primary font-medium">
+                {isLogin ? 'Создать бесплатно' : 'Войти'}
+              </span>
+            </button>
           </div>
         </div>
       </div>
     </div>
   );
 };
+
+export default AuthModal;

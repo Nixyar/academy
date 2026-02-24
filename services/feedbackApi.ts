@@ -23,14 +23,17 @@ export async function getCourseFeedback(courseId: string): Promise<CourseFeedbac
 export async function submitCourseFeedback(
   courseId: string,
   rating: number,
-  comment: string
+  comment?: string
 ): Promise<{ ok: boolean; updated_at: string }> {
+  const body: Record<string, unknown> = { rating };
+  if (comment) body.comment = comment;
+
   const response = await apiFetch(`/api/feedback/${encodeURIComponent(courseId)}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ rating, comment }),
+    body: JSON.stringify(body),
   });
 
   return response as { ok: boolean; updated_at: string };

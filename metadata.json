@@ -1,4 +1,5 @@
 {
-  "name": "VibeCoderAi",
-  "description": "Платформа обучения вайб-кодингу с ИИ. Создавайте приложения силой мысли."
+  "name": "VibecoderAi Academy",
+  "description": "Образовательная платформа для изучения ИИ, промпт-инжиниринга и вайбкодинга.",
+  "requestFramePermissions": []
 }
