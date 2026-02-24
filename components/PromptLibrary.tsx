@@ -80,7 +80,7 @@ const PromptLibrary: React.FC<PromptLibraryProps> = ({ prompts }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('Все');
 
-  const categories = ['Все', 'Генерация текста', 'Код', 'Анализ данных', 'Творчество'];
+  const categories = ['Все', ...Array.from(new Set(prompts.map(p => p.category)))];
 
   const filteredPrompts = prompts.filter(p => {
     const matchesSearch = p.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -103,8 +103,8 @@ const PromptLibrary: React.FC<PromptLibraryProps> = ({ prompts }) => {
         </p>
       </div>
 
-      <div className="flex flex-col md:flex-row gap-4 mb-8 justify-between items-center" style={cascade(1)}>
-        <div className="relative w-full md:w-96">
+      <div className="mb-8" style={cascade(1)}>
+        <div className="relative w-full md:w-96 mb-4">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={20} />
           <input
             type="text"
@@ -115,7 +115,7 @@ const PromptLibrary: React.FC<PromptLibraryProps> = ({ prompts }) => {
           />
         </div>
 
-        <div className="flex gap-2 overflow-x-auto pb-2 w-full md:w-auto no-scrollbar">
+        <div className="grid grid-cols-[repeat(6,minmax(0,1fr))] gap-2">
           {categories.map(cat => (
             <button
               key={cat}

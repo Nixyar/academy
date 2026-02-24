@@ -247,8 +247,14 @@ export interface Subscription {
 export interface PromptExample {
   id: string;
   title: string;
-  category: 'Генерация текста' | 'Код' | 'Анализ данных' | 'Творчество';
+  category: string;
   description: string;
   prompt: string;
   explanation: string;
+  difficulty?: 'beginner' | 'intermediate' | 'advanced';
+  technique?: string;
+  tags?: string[];
+  recommendedBy?: string;
+  sourceUrl?: string;
+  isNew?: boolean;
 }
