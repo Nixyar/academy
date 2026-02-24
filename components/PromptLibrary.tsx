@@ -43,34 +43,71 @@ const PromptCard: React.FC<{ prompt: PromptExample }> = ({ prompt }) => {
   };
 
   return (
-    <div className="bg-vibe-card border border-gray-800 rounded-xl p-6 hover:border-vibe-primary/50 transition-all duration-300 hover:shadow-lg hover:shadow-indigo-900/10 group flex flex-col h-full">
-      <div className="flex items-start justify-between mb-4">
-        <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-gray-900 border border-gray-700 text-xs font-medium text-gray-300">
-          <CategoryIcon category={prompt.category} />
-          {prompt.category}
+    <div className="bg-vibe-card border border-gray-800 rounded-xl p-6 hover:border-vibe-primary/50 transition-all duration-300 hover:shadow-lg hover:shadow-indigo-900/10 group flex flex-col h-full relative overflow-hidden">
+      <div className="flex flex-col flex-grow">
+        <div className="flex items-start justify-between mb-4 pr-12">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-gray-900 border border-gray-700 text-xs font-medium text-gray-300">
+              <CategoryIcon category={prompt.category} />
+              {prompt.category}
+            </div>
+          </div>
         </div>
-      </div>
-      
-      <h3 className="text-lg font-bold text-white mb-2">{prompt.title}</h3>
-      <p className="text-gray-400 text-sm mb-6 flex-grow">{prompt.description}</p>
-      
-      <div className="relative bg-black/30 rounded-lg p-4 font-mono text-sm text-indigo-200 border border-gray-800 group-hover:border-gray-600 transition-colors">
-        <button 
-          onClick={handleCopy}
-          className="absolute top-2 right-2 p-1.5 rounded-md bg-gray-800 text-gray-400 hover:text-white hover:bg-gray-700 transition-colors z-10"
-        >
-          {copied ? <Check size={14} className="text-vibe-success" /> : <Copy size={14} />}
-        </button>
-        {/* Fixed height with scroll to prevent layout jumping */}
-        <div className="h-32 overflow-y-auto custom-scrollbar pr-2 leading-relaxed">
-          {prompt.prompt}
-        </div>
+
+        <h3 className="text-lg font-bold text-white mb-1.5">{prompt.title}</h3>
+
+        {prompt.recommendedBy && (
+          <div className="mb-3">
+            <span className="text-xs text-indigo-300 font-medium flex items-center gap-1.5">
+              <span className="text-[10px]">✨</span>
+              {prompt.sourceUrl ? (
+                <a href={prompt.sourceUrl} target="_blank" rel="noopener noreferrer" className="hover:text-indigo-200 hover:underline transition-colors">
+                  Рекомендует: {prompt.recommendedBy}
+                </a>
+              ) : (
+                <span>Рекомендует: {prompt.recommendedBy}</span>
+              )}
+            </span>
+          </div>
+        )}
+
+        <p className="text-gray-400 text-sm mb-5 flex-grow leading-relaxed">{prompt.description}</p>
       </div>
 
-      <div className="mt-4 pt-4 border-t border-gray-800">
-        <p className="text-xs text-gray-500 italic">
-          <span className="font-semibold text-gray-400">Почему это работает:</span> {prompt.explanation}
-        </p>
+      <div className="mt-auto">
+        <div className="relative bg-black/40 rounded-lg p-4 font-mono text-sm text-indigo-200 border border-gray-800 group-hover:border-gray-600 transition-colors">
+          <button
+            onClick={handleCopy}
+            className="absolute top-2 right-2 p-1.5 rounded-md bg-gray-800/80 backdrop-blur-sm text-gray-400 hover:text-white hover:bg-gray-700 transition-colors z-10"
+          >
+            {copied ? <Check size={14} className="text-vibe-success" /> : <Copy size={14} />}
+          </button>
+          {/* Fixed height with scroll to prevent layout jumping */}
+          <div className="h-32 overflow-y-auto custom-scrollbar pr-3 leading-relaxed">
+            {prompt.prompt}
+          </div>
+        </div>
+
+        <div className="mt-5 pt-4 border-t border-gray-800/80">
+          <p className="text-sm text-gray-400 leading-relaxed mb-4">
+            <span className="font-semibold text-white mr-1.5 flex flex-wrap items-center gap-1.5 mb-1">
+              <span className="text-vibe-primary opacity-80">▹</span>
+              Почему это работает:
+            </span>
+            <br />
+            {prompt.explanation}
+          </p>
+
+          {prompt.tags && prompt.tags.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mt-auto">
+              {prompt.tags.map(tag => (
+                <span key={tag} className="text-[10px] text-gray-500 bg-gray-900/50 px-2 py-1 rounded border border-gray-800/50 uppercase tracking-wide">
+                  #{tag}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -79,12 +116,18 @@ const PromptCard: React.FC<{ prompt: PromptExample }> = ({ prompt }) => {
 const PromptLibrary: React.FC<PromptLibraryProps> = ({ prompts }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('Все');
+  const [shuffledPrompts, setShuffledPrompts] = useState<PromptExample[]>([]);
+
+  // Randomize order on component mount
+  useEffect(() => {
+    setShuffledPrompts([...prompts].sort(() => Math.random() - 0.5));
+  }, [prompts]);
 
   const categories = ['Все', ...Array.from(new Set(prompts.map(p => p.category)))];
 
-  const filteredPrompts = prompts.filter(p => {
+  const filteredPrompts = shuffledPrompts.filter(p => {
     const matchesSearch = p.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                          p.description.toLowerCase().includes(searchTerm.toLowerCase());
+      p.description.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesCategory = selectedCategory === 'Все' || p.category === selectedCategory;
     return matchesSearch && matchesCategory;
   });
@@ -120,11 +163,10 @@ const PromptLibrary: React.FC<PromptLibraryProps> = ({ prompts }) => {
             <button
               key={cat}
               onClick={() => setSelectedCategory(cat)}
-              className={`px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
-                selectedCategory === cat
-                  ? 'bg-vibe-primary text-white shadow-lg shadow-indigo-900/50'
-                  : 'bg-vibe-card text-gray-400 hover:text-white hover:bg-gray-800'
-              }`}
+              className={`px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap transition-all ${selectedCategory === cat
+                ? 'bg-vibe-primary text-white shadow-lg shadow-indigo-900/50'
+                : 'bg-vibe-card text-gray-400 hover:text-white hover:bg-gray-800'
+                }`}
             >
               {cat}
             </button>
@@ -144,7 +186,7 @@ const PromptLibrary: React.FC<PromptLibraryProps> = ({ prompts }) => {
         <div className="text-center py-20">
           <p className="text-gray-500 text-lg">Промпты не найдены 😔</p>
           <button
-            onClick={() => {setSearchTerm(''); setSelectedCategory('Все')}}
+            onClick={() => { setSearchTerm(''); setSelectedCategory('Все') }}
             className="text-vibe-primary hover:underline mt-2"
           >
             Сбросить фильтры
