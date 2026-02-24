@@ -21,12 +21,8 @@ jobs:
       - name: Install
         run: npm ci
 
-      - name: Build with prerender
-        run: npm run build:prerender
-        env:
-          PRERENDER: "1"
-          PRERENDER_HOST: "127.0.0.1"
-          PRERENDER_PORT: "0"
+      - name: Build
+        run: npm run build
 
       - name: Upload to Reg.ru via FTP
         uses: SamKirkland/FTP-Deploy-Action@v4.3.5
