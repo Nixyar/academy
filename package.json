@@ -7,8 +7,6 @@
     "start": "vite",
     "dev": "vite",
     "build": "vite build && node scripts/generate-sitemap.mjs",
-    "build:prerender": "PRERENDER=1 vite build && node scripts/generate-sitemap.mjs",
-    "postinstall": "node scripts/patch-prerenderer-host.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -23,13 +21,8 @@
     "@types/node": "^22.14.0",
     "@types/react": "^19.2.7",
     "@vitejs/plugin-react": "^5.0.0",
-    "puppeteer": "^22.15.0",
     "terser": "^5.46.0",
     "typescript": "~5.8.2",
-    "vite": "^6.2.0",
-    "vite-plugin-prerender": "^1.0.8"
-  },
-  "overrides": {
-    "puppeteer": "^22.15.0"
+    "vite": "^6.2.0"
   }
 }
