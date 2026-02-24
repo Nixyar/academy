@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "vite",
+    "dev": "vite",
     "build": "vite build && node scripts/generate-sitemap.mjs",
     "build:prerender": "PRERENDER=1 vite build && node scripts/generate-sitemap.mjs",
     "postinstall": "node scripts/patch-prerenderer-host.mjs",
@@ -13,9 +14,10 @@
   "dependencies": {
     "@google/genai": "^1.33.0",
     "@supabase/supabase-js": "^2.88.0",
-    "lucide-react": "^0.561.0",
-    "react": "^19.2.3",
-    "react-dom": "^19.2.3"
+    "lucide-react": "^0.563.0",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "recharts": "^2.12.0"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
