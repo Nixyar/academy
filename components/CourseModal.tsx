@@ -208,7 +208,7 @@ const CourseModal: React.FC<CourseModalProps> = ({
                 ) : course.isFree ? (
                   <>
                     <Play size={18} className="fill-current" />
-                    {user ? 'Начать обучение' : 'Пробный урок'}
+                    {user ? 'Начать обучение' : 'Начать урок'}
                   </>
                 ) : !user ? (
                   <>

@@ -79,7 +79,7 @@ function mapCourse(row: BackendCourse): Course {
     currency: row.currency ?? null,
     llmLimit: typeof row.llm_limit === 'number' ? row.llm_limit : row.llm_limit == null ? null : Number(row.llm_limit),
     isPurchased: Boolean(row.is_purchased),
-    isFree: access !== 'pro',
+    isFree: access === 'free',
     lessons: [],
     modules: [],
   };

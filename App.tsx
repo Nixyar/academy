@@ -19,6 +19,7 @@ import { fetchPurchasedCourseIds } from './services/purchasesApi';
 import { syncTbankCoursePurchase } from './services/paymentsApi';
 import { supabase, clearSupabaseStoredSession } from './services/supabaseClient';
 import { userFromProfile } from './services/userFromProfile';
+import { getAllLocalCourseProgress, clearLocalProgress } from './services/localProgressApi';
 
 import { LayoutDashboard, Library, LogIn, LogOut, User as UserIcon, Loader2 } from 'lucide-react';
 
@@ -153,13 +154,26 @@ const App: React.FC = () => {
       } catch {
         // Not authenticated — that's fine
         setUser(null);
+        // Restore guest progress from localStorage
+        const localProgress = getAllLocalCourseProgress();
+        if (Object.keys(localProgress).length > 0) {
+          setCourseProgress(localProgress as Record<string, CourseProgress>);
+        }
       }
 
       // Load courses (public, no auth needed)
       try {
         setCoursesLoading(true);
         const c = await fetchCourses();
-        setCourses(c);
+        // Pre-fetch lesson lists for all courses so counts are shown immediately
+        const contents = await Promise.allSettled(c.map(co => fetchCourseContent(co.id)));
+        const withLessons = c.map((co, i) => {
+          const r = contents[i];
+          return r.status === 'fulfilled'
+            ? { ...co, lessons: r.value.lessons, modules: r.value.modules }
+            : co;
+        });
+        setCourses(withLessons);
       } catch (e) {
         console.error('Failed to load courses', e);
       } finally {
@@ -348,6 +362,24 @@ const App: React.FC = () => {
       if (!u.termsAccepted || !u.privacyAccepted) {
         setConsentModalOpen(true);
       }
+
+      // Sync guest localStorage progress to server
+      const localProgress = getAllLocalCourseProgress();
+      if (Object.keys(localProgress).length > 0) {
+        for (const [courseId, cp] of Object.entries(localProgress)) {
+          for (const [lessonId, lp] of Object.entries(cp.lessons)) {
+            if (lp.status === 'completed') {
+              patchCourseProgress(courseId, {
+                op: 'lesson_status',
+                lessonId,
+                status: 'completed',
+                completedAt: lp.completedAt,
+              }).catch(() => {});
+            }
+          }
+        }
+        clearLocalProgress();
+      }
     } catch { /* ignore */ }
   }, []);
 
@@ -362,6 +394,23 @@ const App: React.FC = () => {
   const selectedCourse = selectedCourseSlug ? courses.find(c => c.slug === selectedCourseSlug) : null;
   const viewingCourse = viewingCourseId ? courses.find(c => c.id === viewingCourseId) : null;
   const isLessonMode = activeTab === 'courses' && !!selectedCourse;
+
+  // Auto-fetch course content when navigating directly to a course URL
+  // (lessons array is empty until content is loaded — e.g. page refresh or direct link)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (activeTab === 'courses' && selectedCourse && !(selectedCourse.lessons?.length)) {
+      fetchCourseContent(selectedCourse.id)
+        .then(content => {
+          setCourses(prev => prev.map(c =>
+            c.id === selectedCourse.id
+              ? { ...c, lessons: content.lessons, modules: content.modules }
+              : c
+          ));
+        })
+        .catch(() => {});
+    }
+  }, [activeTab, selectedCourse?.id]);
 
   // Calculate stats for Dashboard
   const totalLessons = user ? courses.reduce((acc, course) => {
@@ -632,8 +681,22 @@ const App: React.FC = () => {
         {/* Footer */}
         {!isLessonMode && (
           <footer className="border-t border-gray-800 bg-vibe-dark/50 backdrop-blur-sm py-8 mt-auto relative z-10">
-            <div className="max-w-7xl mx-auto px-6 text-center text-gray-500 text-sm">
+            <div className="max-w-7xl mx-auto px-6 text-center text-gray-500 text-sm space-y-3">
               <p>&copy; 2025-2026 VibecoderAi Academy. Учись, создавай, ускоряй.</p>
+              <div className="flex flex-wrap justify-center gap-x-6 gap-y-2">
+                <a href="/offer.pdf" target="_blank" rel="noopener noreferrer"
+                   className="hover:text-gray-300 transition-colors">
+                  Публичная оферта
+                </a>
+                <a href="/agreement.pdf" target="_blank" rel="noopener noreferrer"
+                   className="hover:text-gray-300 transition-colors">
+                  Пользовательское соглашение
+                </a>
+                <a href="/privacy.pdf" target="_blank" rel="noopener noreferrer"
+                   className="hover:text-gray-300 transition-colors">
+                  Политика конфиденциальности
+                </a>
+              </div>
             </div>
           </footer>
         )}

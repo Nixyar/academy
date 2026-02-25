@@ -16,6 +16,7 @@ import { fetchLessonContent, getCachedLessonContent } from '../services/lessonsA
 import { patchCourseProgress } from '../services/progressApi';
 import { fetchCourseQuota } from '../services/courseQuotaApi';
 import { submitCourseFeedback } from '../services/feedbackApi';
+import { setLocalLessonCompleted, getLocalCourseProgress } from '../services/localProgressApi';
 
 /* ─── Copy-protection for lesson content ─── */
 const COPYABLE_SELECTOR = [
@@ -220,17 +221,24 @@ const CourseViewer: React.FC<CourseViewerProps> = ({
 
   const handleNextAndComplete = async () => {
     // Mark current as complete
-    if (!isCompleted && !isGuest && currentLesson) {
-      try {
-        const updated = await patchCourseProgress(course.id, {
-          op: 'lesson_status',
-          lessonId: currentLesson.id,
-          status: 'completed',
-          completedAt: new Date().toISOString(),
-        });
-        onProgressChange(course.id, updated);
-      } catch (e) {
-        console.error('Failed to save progress', e);
+    if (!isCompleted && currentLesson) {
+      if (!isGuest) {
+        // Authenticated: save to server
+        try {
+          const updated = await patchCourseProgress(course.id, {
+            op: 'lesson_status',
+            lessonId: currentLesson.id,
+            status: 'completed',
+            completedAt: new Date().toISOString(),
+          });
+          onProgressChange(course.id, updated);
+        } catch (e) {
+          console.error('Failed to save progress', e);
+        }
+      } else {
+        // Guest: save to localStorage
+        setLocalLessonCompleted(course.id, currentLesson.id);
+        onProgressChange(course.id, getLocalCourseProgress(course.id) as any);
       }
     }
 

@@ -22,7 +22,7 @@ const TIPS = [
   "Разбивайте сложные задачи на цепочку последовательных промптов.",
   "Используйте разделители (###) для четкого отделения инструкций от контекста."
 ];
-const COURSE_CARD_SIZE = 'w-[300px] md:w-[350px] h-[520px]';
+const COURSE_CARD_SIZE = 'w-[300px] md:w-[350px] h-[420px]';
 
 const CourseCard = ({
   course,
@@ -74,7 +74,12 @@ const CourseCard = ({
               {course.level}
             </div>
           )}
-          {course.label && (
+          {course.label && !(
+            course.isFree && (
+              (typeof course.label === 'string' && course.label.toLowerCase() === 'бесплатно') ||
+              (Array.isArray(course.label) && course.label[0]?.toLowerCase() === 'бесплатно')
+            )
+          ) && (
             <div className="bg-vibe-primary/80 backdrop-blur-md px-3 py-1 rounded-full text-xs font-bold text-white border border-white/10 shadow-xl">
               {Array.isArray(course.label) ? course.label[0] : course.label}
             </div>

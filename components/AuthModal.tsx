@@ -96,8 +96,11 @@ const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuccess })
 
         <div className="p-8">
           <div className="text-center mb-8">
-            <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-vibe-card border border-gray-700 mb-4 text-white">
-              <span className="font-bold text-xl">Ai</span>
+            <div className="inline-flex items-center gap-2 mb-4">
+              <span className="font-bold text-xl text-white">Vibecoder</span>
+              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-vibe-primary to-vibe-accent flex items-center justify-center text-white shadow-lg shadow-indigo-500/20">
+                Ai
+              </div>
             </div>
             <h2 className="text-2xl font-bold text-white mb-2">
               {isLogin ? 'С возвращением!' : 'Создать аккаунт'}
