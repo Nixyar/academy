@@ -11,13 +11,15 @@ node_modules
 dist
 dist-ssr
 
-# Environment files
+# Environment files — never commit real values, only *.example
 .env
 .env.local
 .env*.local
 .env.development.local
 .env.production.local
 academy-backend/.env
+!.env.example
+!.env.development.local.example
 
 # Editor directories and files
 .vscode/*
@@ -29,4 +31,11 @@ academy-backend/.env
 *.njsproj
 *.sln
 *.sw?
+
+# The backend lives in its own repository:
+# https://github.com/Nixyar/academy-backend
 /academy-backend/
+
+# Local tooling / scratch
+.claude/
+supabase/
